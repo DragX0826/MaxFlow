@@ -222,8 +222,9 @@ def compute_grpo_maxrl_loss_demo(log_probs, rewards):
     # 2. Weight = Reward / (Baseline + eps)
     weights = rewards / (baseline + 1e-6)
     weights = torch.clamp(weights, min=0.0, max=5.0)
-    # 3. Loss (Add small epsilon for log stability)
-    loss = -torch.mean(weights.detach() * torch.log(log_probs.clamp(min=1e-6) + 1e-9))
+    # 3. Loss: Minimize Weighted NLL (MSE is a proxy for NLL)
+    # SOTA Fix: Remove double log which caused NaN when loss became small.
+    loss = torch.mean(weights.detach() * log_probs)
     return loss, baseline.item()
 
 # Muon Optimizer (Inline for demo portability)
@@ -257,9 +258,9 @@ class MuonDemo(torch.optim.Optimizer):
                     g = X.view_as(g)
                 p.add_(g, alpha=-lr)
 
-model.train()
 # Optimizer: Muon (Faster convergence than AdamW)
-optimizer = MuonDemo(model.parameters(), lr=0.02, momentum=0.95)
+# SOTA Fix: Lower LR for demo stability
+optimizer = MuonDemo(model.parameters(), lr=0.01, momentum=0.95)
 
 print("   -> Optimizer: Muon (Momentum Orthogonalized) [SOTA 2025]")
 print("   -> Objective: Critic-Free MaxRL (GRPO-style Baseline)")
@@ -344,19 +345,16 @@ real_mols = []
 print("   -> Running Sequential Inference (Safe Mode)...")
 
 try:
-    for i in range(100):
+    for i in range(batch_size):
         # Local batch size 1
         t_batch_start = time.time()
         
         # Random Prior
-        x_L = torch.randn(30, 167).to(device)
-        pos_L = torch.randn(30, 3).to(device)
+        x_noise = torch.randn(30, 167).to(device)
+        p_noise = torch.randn(30, 3).to(device)
         
         batch_data = FlowData(
-            x_L=x_L,
-            pos_L=pos_L,
-            x_P=feat_P_real, # Already on device
-            pos_P=pos_P_real, # Already on device
+            x_L=x_noise, pos_L=p_noise, x_P=feat_P_real, pos_P=pos_P_real,
             pocket_center=pocket_center,
             num_nodes_L=torch.tensor([30], device=device),
             num_nodes_P=torch.tensor([50], device=device)
@@ -379,21 +377,27 @@ try:
              
         inference_times.append(time.time() - t_batch_start)
 
-        # Final Output Reshaping (Robust for Batch Size 1)
-        pos_final = pos_L.detach().cpu().numpy()
-        if pos_final.size == 0: continue
+        # Final Output extraction (Robust for Batch Size 1)
+        if isinstance(traj, tuple):
+             pos_gen = traj[0].detach().cpu().numpy()
+             x_gen = x_noise.detach().cpu().numpy() # Use features from noise for reconstruction
+        else:
+             pos_gen = traj['pos'].detach().cpu().numpy()
+             x_gen = traj['x'].detach().cpu().numpy()
+             
+        if pos_gen.size == 0: continue
         
         # Reconstruction Logic (RDKit)
         from rdkit import Chem
-        atom_types = torch.argmax(x_L[:, :100], dim=-1)
+        atom_types = torch.argmax(torch.from_numpy(x_gen)[:, :100], dim=-1)
         try:
             mol = Chem.RWMol()
             for a_idx in atom_types:
                 mol.AddAtom(Chem.Atom(int(a_idx.item()) % 90 + 1))
             conf = Chem.Conformer(len(atom_types))
-            for k, pos in enumerate(pos_final):
+            for k, p_val in enumerate(pos_gen):
                 if k < len(atom_types):
-                    conf.SetAtomPosition(k, (float(pos[0]), float(pos[1]), float(pos[2])))
+                    conf.SetAtomPosition(k, (float(p_val[0]), float(p_val[1]), float(p_val[2])))
             mol.AddConformer(conf)
             real_mols.append(mol.GetMol())
         except:
