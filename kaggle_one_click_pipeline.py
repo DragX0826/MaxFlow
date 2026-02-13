@@ -222,8 +222,8 @@ def compute_grpo_maxrl_loss_demo(log_probs, rewards):
     # 2. Weight = Reward / (Baseline + eps)
     weights = rewards / (baseline + 1e-6)
     weights = torch.clamp(weights, min=0.0, max=5.0)
-    # 3. Loss
-    loss = -torch.mean(weights.detach() * log_probs)
+    # 3. Loss (Add small epsilon for log stability)
+    loss = -torch.mean(weights.detach() * torch.log(log_probs.clamp(min=1e-6) + 1e-9))
     return loss, baseline.item()
 
 # Muon Optimizer (Inline for demo portability)
@@ -379,17 +379,23 @@ try:
              
         inference_times.append(time.time() - t_batch_start)
 
-        # Reconstruct
-        atom_types = torch.argmax(x_final[:, :100], dim=-1)
+        # Final Output Reshaping (Robust for Batch Size 1)
+        pos_final = pos_L.detach().cpu().numpy()
+        if pos_final.size == 0: continue
+        
+        # Reconstruction Logic (RDKit)
+        from rdkit import Chem
+        atom_types = torch.argmax(x_L[:, :100], dim=-1)
         try:
-             mol = Chem.RWMol()
-             for a_idx in atom_types:
-                 mol.AddAtom(Chem.Atom(int(a_idx.item()) % 90 + 1)) # Safety modulo
-             conf = Chem.Conformer(len(atom_types))
-             for k, pos in enumerate(pos_final):
-                 conf.SetAtomPosition(k, (float(pos[0]), float(pos[1]), float(pos[2])))
-             mol.AddConformer(conf)
-             real_mols.append(mol.GetMol())
+            mol = Chem.RWMol()
+            for a_idx in atom_types:
+                mol.AddAtom(Chem.Atom(int(a_idx.item()) % 90 + 1))
+            conf = Chem.Conformer(len(atom_types))
+            for k, pos in enumerate(pos_final):
+                if k < len(atom_types):
+                    conf.SetAtomPosition(k, (float(pos[0]), float(pos[1]), float(pos[2])))
+            mol.AddConformer(conf)
+            real_mols.append(mol.GetMol())
         except:
              pass
              
