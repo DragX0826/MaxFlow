@@ -256,12 +256,13 @@ def run_absolute_truth_pipeline():
     # 4. A/B Test Construction (Fixed Noise)
     torch.manual_seed(42)
     batch_size = 16
-    x_L = torch.randn(batch_size, 167, device=device).detach() 
-    # [STABILITY] Jitter positions to avoid exact zero distance
-    pos_L = torch.randn(batch_size, 3, device=device).detach() * 0.1
+    # [STABILITY] Initialize Ligand AT THE POCKET CENTER
+    # This ensures Soft-Core gradients are felt immediately.
+    pocket_center = pos_P.mean(0)
+    pos_L = pocket_center + torch.randn(batch_size, 3, device=device).detach() * 1.0 # 1.0A spread
     q_L = torch.zeros(batch_size, device=device).requires_grad_(True)
     
-    data = FlowData(x_L=x_L, pos_L=pos_L, x_P=x_P, pos_P=pos_P, pocket_center=pos_P.mean(0))
+    data = FlowData(x_L=x_L, pos_L=pos_L, x_P=x_P, pos_P=pos_P, pocket_center=pocket_center)
     
     # 5. Optimization Loop (Genesis Training / TTA)
     # [STABILITY] Lower LR to 0.002 for conservative startup
@@ -270,33 +271,35 @@ def run_absolute_truth_pipeline():
 
     print(f"🚀 Starting TTA Optimization on 7SMV Target ({pos_P.size(0)} residues)...")
     print("   [Protocol] Extending rigorous minimization to 1000 steps for ICLR standard.")
-    print("   [SOTA] Applying Curriculum Learning with Beutler Soft-Core Potential (Alpha: 200.0 -> 0.0)")
+    print("   [SOTA] Applying Curriculum Learning with Beutler Soft-Core Potential (Alpha: 200.0 -> 0.001)")
     
     for step in range(1, 1001):
         optimizer.zero_grad()
         out = model(data)
         
         # [SOTA] Curriculum Schedule
-        # Softness (Alpha) anneals from 200.0 (Gas Phase/Ghost) -> 0.0 (Solid Matter)
-        # Phase 1 (0-200): High Softness to resolve heavy clashes
-        # Phase 2 (200-800): Annealing
-        # Phase 3 (800-1000): Hard Physics (Sigma=0) for final validity
+        # Softness (Alpha) anneals from 200.0 (Gas Phase) -> 0.001 (Hard Phase w/ Safety)
         progress = max(0, min(1, (step - 100) / 700)) # Ramp from step 100 to 800
         softness = 200.0 * (1.0 - progress)
-        if step > 800: softness = 0.0 # Hard physics enforcement
+        if step > 800: softness = 0.001 # Maintain microscopic softness for numerical safety
         
         # Differentiable Energy Calculation
         # [STABILITY] Velocity update clamp
         v_scaled = torch.clamp(out['v_pred'], min=-5.0, max=5.0) 
         next_pos = data.pos_L + v_scaled * 0.1
         
+        # [STABILITY] Center Gravity: Keep ligand from drifting into deep space during Ghost Phase
+        dist_from_center = (next_pos - data.pocket_center).norm(dim=-1)
+        gravity = 0.1 * dist_from_center.mean() # Gentle pull to center
+
         # Pass dynamic softness to Physics Engine
         energy = PhysicsEngine.compute_energy(next_pos, pos_P, q_L, q_P, softness=softness)
         repulsion = PhysicsEngine.calculate_intra_repulsion(next_pos, softness=softness)
         
         # MaxRL Style Loss (Negative Reward)
-        reward = -energy - 0.5 * repulsion
-        loss = -reward # Minimize energy / Maximize reward
+        # Minimize Energy + Repulsion + Gravity
+        reward = -energy - 0.5 * repulsion - gravity
+        loss = -reward 
         
         if torch.isnan(loss):
             print(f"⚠️ [Step {step}] NaN detected in loss. Emergency break.")
