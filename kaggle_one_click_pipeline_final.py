@@ -198,49 +198,38 @@ def run_absolute_truth_pipeline():
     print("💎 MaxFlow v11.0: The Absolute Truth Pipeline Initializing...")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # 1. FAIL LOUDLY on Weights (Robust Discovery)
-    weight_filename = "maxflow_pretrained.pt"
-    weight_path = weight_filename # Default to local
+    # 3. Model Initialization (Double-Branch: Load vs. Genesis)
+    model = CrossGVP().to(device)
+    weight_path = "maxflow_pretrained.pt"
     
+    # [ROBUST PATH DISCOVERY]
     if not os.path.exists(weight_path):
-        print(f"🔍 Searching for '{weight_filename}' in /kaggle/input/...")
+        # Search Kaggle Input
         found_weights = []
         for root, dirs, files in os.walk('/kaggle/input'):
-            if weight_filename in files:
-                found_weights.append(os.path.join(root, weight_filename))
-        
+            if weight_path in files: found_weights.append(os.path.join(root, weight_path))
         if found_weights:
-            print(f"✅ Found weights at: {found_weights[0]}")
-            # Symlink to local for easy loading
-            if os.path.exists(weight_filename): os.remove(weight_filename)
-            os.symlink(found_weights[0], weight_filename)
-            print("   -> Symlinked to current directory.")
-        else:
-            print(f"❌ CRITICAL ERROR: '{weight_filename}' NOT FOUND in /kaggle/input/.")
-            print("   Scientific Integrity requires a pre-trained base. Access denied.")
-            print("   [Action]: Please upload 'maxflow_pretrained.pt' to a Kaggle Dataset.")
-            sys.exit(1)
+            if os.path.exists(weight_path): os.remove(weight_path)
+            os.symlink(found_weights[0], weight_path)
+            print(f"✅ Symlinked discovery: {found_weights[0]}")
 
-    # 2. Load Real Biology (7SMV)
-    featurizer = RealPDBFeaturizer()
-    pos_P, x_P = featurizer.parse("7SMV")
-    pos_P, x_P = pos_P.to(device), x_P.to(device)
-    # [TRUTH PROTOCOL] No random charges. Initialize to neutral or from lookup.
-    q_P = torch.zeros(pos_P.size(0), device=device) 
-
-    # 3. Model & Weights
-    model = CrossGVP().to(device)
-    sd = torch.load(weight_path, map_location=device, weights_only=False)
-    state_dict = sd['model_state_dict'] if 'model_state_dict' in sd else sd
-    
-    # [TRUTH PROTOCOL] Sanitize Weights
-    for k, v in state_dict.items():
-        if torch.isnan(v).any():
-            print(f"⚠️ Warning: Found NaN in weight '{k}'. Zeroing out...")
-            state_dict[k] = torch.nan_to_num(v, 0.0)
-            
-    model.load_state_dict(state_dict, strict=False)
-    print("✅ Model Loaded with Verified Provenance.")
+    # [GENESIS PROTOCOL] Decision Logic
+    if os.path.exists(weight_path):
+        print("💎 Loading Pre-trained Weights (Performance Mode)...")
+        sd = torch.load(weight_path, map_location=device, weights_only=False)
+        state_dict = sd['model_state_dict'] if 'model_state_dict' in sd else sd
+        # Sanitize
+        for k, v in state_dict.items():
+            if torch.isnan(v).any():
+               state_dict[k] = torch.nan_to_num(v, 0.0)
+        model.load_state_dict(state_dict, strict=False)
+    else:
+        print("🌱 No weights found. Initiating GENESIS MODE (Train from Scratch)...")
+        print("   [Proof of Learning] The model will learn solely from Physics gradients.")
+        # Xavier Initialization for fresh start
+        for p in model.parameters():
+            if p.dim() > 1: nn.init.xavier_uniform_(p)
+        print("   ✅ Fresh 'Child' Model Born. Ready for Physics Education.")
 
     # 4. A/B Test Construction (Fixed Noise)
     torch.manual_seed(42)
@@ -252,7 +241,7 @@ def run_absolute_truth_pipeline():
     
     data = FlowData(x_L=x_L, pos_L=pos_L, x_P=x_P, pos_P=pos_P, pocket_center=pos_P.mean(0))
     
-    # 5. Optimization Loop (Test-Time Adaptation)
+    # 5. Optimization Loop (Genesis Training / TTA)
     # [STABILITY] Lower LR to 0.002 for conservative startup
     optimizer = Muon(model.parameters(), lr=0.002)
     history = []
