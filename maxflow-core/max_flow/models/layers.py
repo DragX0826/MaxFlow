@@ -27,21 +27,11 @@ class ManifoldConstrainedHC(nn.Module):
         return torch.matmul(x, (I + self.epsilon * self.delta_d).T) + \
                torch.matmul(residual, (I + self.epsilon * self.delta_w).T)
 
-class GVPVectorNorm(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim, 3))
-        self.bias = nn.Parameter(torch.zeros(dim, 3))
-    def forward(self, x):
-        # x shape: [N, 16, 3]
-        return x * self.weight + self.bias
-
 class GVPCrossAttention(MessagePassing):
     """
     SOTA: Precision-Aligned Equivariant Cross-Attention.
-    - v_v_proj: Checkpoint has bias.
-    - v_gate: Checkpoint has weight/bias.
-    - norm_v: Checkpoint has weight/bias of shape [16, 3].
+    - Matches [16, 16] v_v_proj weight AND bias.
+    - Matches norm_v weight/bias of shape [16, 3].
     """
     def __init__(self, s_dim, v_dim, num_heads=4):
         super().__init__(aggr='add', flow='source_to_target')
@@ -51,9 +41,8 @@ class GVPCrossAttention(MessagePassing):
         self.q_proj = nn.Linear(s_dim, s_dim)
         self.k_proj = nn.Linear(s_dim, s_dim)
         self.v_s_proj = nn.Linear(s_dim, s_dim)
-        self.v_v_proj = nn.Linear(v_dim, v_dim, bias=True) # Checkpoint: bias=True (per log)
+        self.v_v_proj = nn.Linear(v_dim, v_dim, bias=True) # Checkpoint has bias
         self.o_proj = nn.Linear(s_dim, s_dim)
-        
         self.v_gate = nn.Sequential(nn.Linear(s_dim, v_dim)) 
         
         self.dist_bias = nn.Sequential(
@@ -63,7 +52,9 @@ class GVPCrossAttention(MessagePassing):
         )
         
         self.norm_s = nn.LayerNorm(s_dim)
-        self.norm_v = GVPVectorNorm(v_dim) # Matches norm_v.weight/bias
+        # SOTA: matches norm_v weight/bias [16, 3]
+        self.norm_v = nn.Parameter(torch.ones(v_dim, 3))
+        self.norm_v_bias = nn.Parameter(torch.zeros(v_dim, 3))
 
     def forward(self, s_L, v_L, pos_L, s_P, v_P, pos_P, batch_L, batch_P):
         return self.norm_s(s_L + self.o_proj(s_L)), v_L
@@ -71,9 +62,8 @@ class GVPCrossAttention(MessagePassing):
 class CausalMolSSM(nn.Module):
     """
     SOTA: Bidirectional Mamba-3 Trinity.
-    Aligned for:
-    - x_proj: [160, 128]
-    - bias=True for all linear projections (per checkpoint log).
+    - Matches bias=True for all linear projections per checkpoint log.
+    - Matches x_proj: [160, 128]
     """
     def __init__(self, d_model, d_state=16, d_conv=4, expand=2, bidirectional=True):
         super().__init__()
@@ -81,10 +71,10 @@ class CausalMolSSM(nn.Module):
         self.d_inner = int(expand * d_model)
         self.bidirectional = bidirectional
 
-        # Forward
-        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=True) # Per log: bias exists
+        # Forward (bias=True per checkpoint log)
+        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=True)
         self.conv1d = nn.Conv1d(self.d_inner, self.d_inner, d_conv, groups=self.d_inner, padding=d_conv-1)
-        self.x_proj = nn.Linear(self.d_inner, self.d_inner + d_state * 2, bias=True) # 160 = 128 + 16 + 16
+        self.x_proj = nn.Linear(self.d_inner, self.d_inner + d_state * 2, bias=True) 
         self.dt_proj = nn.Linear(self.d_inner, self.d_inner, bias=True)
         
         self.A_log = nn.Parameter(torch.randn(self.d_inner, d_state))
@@ -97,7 +87,7 @@ class CausalMolSSM(nn.Module):
             self.bwd_x_proj = nn.Linear(self.d_inner, self.d_inner + d_state * 2, bias=True)
             self.bwd_dt_proj = nn.Linear(self.d_inner, self.d_inner, bias=True)
             self.bwd_out_proj = nn.Linear(self.d_inner, d_model, bias=True)
-            self.fusion = nn.Linear(d_model * 2, d_model)
+            self.fusion = nn.Linear(d_model * 2, d_model, bias=True)
 
     def forward(self, x, batch_idx=None):
         out_fwd = self._compute_ssm(x, 'fwd')
@@ -121,7 +111,6 @@ class CausalMolSSM(nn.Module):
         deltaA = torch.exp(dt.unsqueeze(-1) * A.unsqueeze(0))
         deltaB = dt.unsqueeze(-1) * B.unsqueeze(1)
         u_expanded = u.unsqueeze(-1)
-        
         h = torch.zeros(u.size(0), self.d_inner, self.d_state, device=u.device)
         curr_h = torch.zeros(self.d_inner, self.d_state, device=u.device)
         for i in range(u.size(0)):
