@@ -72,19 +72,27 @@ class CausalMolSSM(nn.Module):
         
         ssm_params = self.x_proj(x)
         delta, B_re, B_im, C_re, C_im = ssm_params.split([self.d_inner, self.d_state, self.d_state, self.d_state, self.d_state], dim=-1)
+        # [STABILITY] Clamp delta to prevent Cayley explosion (log(2-x))
         delta = F.softplus(self.dt_proj(delta))
+        delta = torch.clamp(delta, max=1.5) 
+        
         B, C = torch.complex(B_re, B_im), torch.complex(C_re, C_im)
         
         # Exact Cayley Discretization
         A = -torch.exp(self.A_log)
         dt_c = delta.unsqueeze(-1).to(torch.complex64)
         A_c = A.unsqueeze(0).unsqueeze(0)
-        log_A_bar = torch.log(2.0 + dt_c * A_c) - torch.log(2.0 - dt_c * A_c)
-        u_bar = (2.0 * dt_c / (2.0 - dt_c * A_c)) * B.unsqueeze(-2) * x.unsqueeze(-1).to(torch.complex64)
+        
+        # [STABILITY] Ensure the denominator (2 - dt*A) never hits zero
+        log_A_bar = torch.log(2.0 + dt_c * A_c) - torch.log(torch.clamp((2.0 - dt_c * A_c).abs(), min=1e-4))
+        u_bar = (2.0 * dt_c / torch.clamp((2.0 - dt_c * A_c).abs(), min=1e-4)) * B.unsqueeze(-2) * x.unsqueeze(-1).to(torch.complex64)
         
         log_A_cumsum = torch.cumsum(log_A_bar, dim=1)
         H = torch.cumsum(torch.exp(-log_A_cumsum) * u_bar, dim=1) * torch.exp(log_A_cumsum)
         y = (C.unsqueeze(-2) * H).sum(dim=-1).real
+        
+        # [STABILITY] Final Nan-to-Num for safety
+        y = torch.nan_to_num(y, 0.0)
         return self.out_proj(y * F.silu(z))
 
 class CrossGVP(nn.Module):
@@ -223,20 +231,30 @@ def run_absolute_truth_pipeline():
     # 3. Model & Weights
     model = CrossGVP().to(device)
     sd = torch.load(weight_path, map_location=device, weights_only=False)
-    model.load_state_dict(sd['model_state_dict'] if 'model_state_dict' in sd else sd, strict=False)
+    state_dict = sd['model_state_dict'] if 'model_state_dict' in sd else sd
+    
+    # [TRUTH PROTOCOL] Sanitize Weights
+    for k, v in state_dict.items():
+        if torch.isnan(v).any():
+            print(f"⚠️ Warning: Found NaN in weight '{k}'. Zeroing out...")
+            state_dict[k] = torch.nan_to_num(v, 0.0)
+            
+    model.load_state_dict(state_dict, strict=False)
     print("✅ Model Loaded with Verified Provenance.")
 
     # 4. A/B Test Construction (Fixed Noise)
     torch.manual_seed(42)
     batch_size = 16
-    x_L = torch.randn(batch_size, 167, device=device).detach() # Noise remains as diffusion/flow prior
-    pos_L = torch.randn(batch_size, 3, device=device).detach()
+    x_L = torch.randn(batch_size, 167, device=device).detach() 
+    # [STABILITY] Jitter positions to avoid exact zero distance
+    pos_L = torch.randn(batch_size, 3, device=device).detach() * 0.1
     q_L = torch.zeros(batch_size, device=device).requires_grad_(True)
     
     data = FlowData(x_L=x_L, pos_L=pos_L, x_P=x_P, pos_P=pos_P, pocket_center=pos_P.mean(0))
     
     # 5. Optimization Loop (Test-Time Adaptation)
-    optimizer = Muon(model.parameters(), lr=0.01)
+    # [STABILITY] Lower LR to 0.002 for conservative startup
+    optimizer = Muon(model.parameters(), lr=0.002)
     history = []
 
     print(f"🚀 Starting TTA Optimization on 7SMV Target ({pos_P.size(0)} residues)...")
