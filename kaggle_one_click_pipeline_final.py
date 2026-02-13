@@ -117,18 +117,29 @@ class CrossGVP(nn.Module):
 class PhysicsEngine:
     """Pure PyTorch Differentiable Physics for Gradient-Guided Optimization."""
     @staticmethod
-    def compute_energy(pos_L, pos_P, q_L, q_P, dielectric=80.0):
-        # 1. Distances (Harden epsilon to prevent NaN)
-        dist = torch.cdist(pos_L, pos_P) + 1e-3
+    def compute_energy(pos_L, pos_P, q_L, q_P, dielectric=80.0, softness=0.0):
+        # 1. Distances
+        dist = torch.cdist(pos_L, pos_P)
         
         # 2. Electrostatics (Coulomb)
         # Constant 332.06 converts (e^2 / Angstrom) to kcal/mol
-        e_elec = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * dist)
+        # [SOTA] Soft-Core Coulomb: 1 / sqrt(r^2 + softness)
+        dist_elec = torch.sqrt(dist.pow(2) + softness)
+        e_elec = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * dist_elec)
         
-        # 3. VdW (Lennard-Jones 12-6) - Cap to prevent explosion
+        # 3. VdW (Lennard-Jones 12-6) - Beutler's Soft-Core Potential
+        # Formula: V = 4*eps * [ (sigma^6 / (r^6 + alpha*sigma^6))^2 - (sigma^6 / (r^6 + alpha*sigma^6)) ]
+        # Simplified here: effective r6 = r^6 + softness
         sigma = 3.5
-        inv_r6 = (sigma / dist) ** 6
-        e_vdw = 0.15 * (inv_r6**2 - 2 * inv_r6)
+        sigma_6 = sigma ** 6
+        
+        # [SOTA] Soft-Core LJ: r_eff^6 = r^6 + softness
+        r6_eff = dist.pow(6) + softness
+        
+        # 12-6 Potential with Soft Core
+        # 0.15 is roughly epsilon for typical atom pairs
+        term_r6 = sigma_6 / r6_eff
+        e_vdw = 0.15 * (term_r6.pow(2) - 2 * term_r6)
         
         # [STABILITY] Cap individual energy terms at 1000.0 kcal/mol
         energy = (e_elec + e_vdw).clamp(min=-1000.0, max=1000.0).sum()
