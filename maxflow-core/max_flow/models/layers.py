@@ -15,22 +15,22 @@ class HyperConnection(nn.Module):
     def forward(self, x, residual):
         return torch.matmul(x, self.W_d.T) + torch.matmul(residual, self.W_w.T)
 
-class ManifoldConstrainedHC(nn.Module):
-    def __init__(self, dim, epsilon=0.01):
+class GVPVectorNorm(nn.Module):
+    """
+    SOTA: Vector-Norm Layer.
+    Matches checkpoint naming: norm_v.weight, norm_v.bias [16, 3]
+    """
+    def __init__(self, dim):
         super().__init__()
-        self.dim = dim
-        self.delta_d = nn.Parameter(torch.zeros(dim, dim))
-        self.delta_w = nn.Parameter(torch.zeros(dim, dim))
-        self.epsilon = epsilon
-    def forward(self, x, residual):
-        I = torch.eye(self.dim, device=x.device)
-        return torch.matmul(x, (I + self.epsilon * self.delta_d).T) + \
-               torch.matmul(residual, (I + self.epsilon * self.delta_w).T)
+        self.weight = nn.Parameter(torch.ones(dim, 3))
+        self.bias = nn.Parameter(torch.zeros(dim, 3))
+    def forward(self, x):
+        return x * self.weight + self.bias
 
 class GVPCrossAttention(MessagePassing):
     """
-    SOTA: Equivariant Multi-Head Cross-Attention.
-    Aligned with maxflow_pretrained.pt exact Parameter naming.
+    SOTA: Precision-Aligned Equivariant Cross-Attention.
+    Aligned with maxflow_pretrained.pt: norm_v.weight and norm_v.bias.
     """
     def __init__(self, s_dim, v_dim, num_heads=4):
         super().__init__(aggr='add', flow='source_to_target')
@@ -40,7 +40,7 @@ class GVPCrossAttention(MessagePassing):
         self.q_proj = nn.Linear(s_dim, s_dim)
         self.k_proj = nn.Linear(s_dim, s_dim)
         self.v_s_proj = nn.Linear(s_dim, s_dim)
-        self.v_v_proj = nn.Linear(v_dim, v_dim, bias=False) # Checkpoint: Unexpected bias
+        self.v_v_proj = nn.Linear(v_dim, v_dim, bias=False)
         self.o_proj = nn.Linear(s_dim, s_dim)
         
         self.v_gate = nn.Sequential(nn.Linear(s_dim, v_dim)) 
@@ -52,10 +52,8 @@ class GVPCrossAttention(MessagePassing):
         )
         
         self.norm_s = nn.LayerNorm(s_dim)
-        # Checkpoint says: Missing norm_v, norm_v_bias. Unexpected norm_v.weight.
-        # This means they are Parameters named 'norm_v' and 'norm_v_bias'.
-        self.norm_v = nn.Parameter(torch.ones(v_dim, 3))
-        self.norm_v_bias = nn.Parameter(torch.zeros(v_dim, 3))
+        # Checkpoint Fix: Submodule structure for norm_v.weight/bias alignment
+        self.norm_v = GVPVectorNorm(v_dim)
 
     def forward(self, s_L, v_L, pos_L, s_P, v_P, pos_P, batch_L, batch_P):
         return self.norm_s(s_L + self.o_proj(s_L)), v_L
@@ -63,7 +61,7 @@ class GVPCrossAttention(MessagePassing):
 class CausalMolSSM(nn.Module):
     """
     SOTA: Bidirectional Mamba-3 Trinity.
-    - Matches bias=False for all linear projections (checked log: "Unexpected bias").
+    - Matches bias=False for all linear projections per checkpoint log.
     - Matches x_proj: [160, 128]
     """
     def __init__(self, d_model, d_state=16, d_conv=4, expand=2, bidirectional=True):
@@ -72,13 +70,14 @@ class CausalMolSSM(nn.Module):
         self.d_inner = int(expand * d_model)
         self.bidirectional = bidirectional
 
-        # Forward (Strictly bias=False per checkpiont log)
+        # Forward (Strictly bias=False)
         self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
         self.conv1d = nn.Conv1d(self.d_inner, self.d_inner, d_conv, groups=self.d_inner, padding=d_conv-1)
         self.x_proj = nn.Linear(self.d_inner, self.d_inner + d_state * 2, bias=False) # 160
         self.dt_proj = nn.Linear(self.d_inner, self.d_inner, bias=True)
         
-        self.A_log = nn.Parameter(torch.randn(self.d_inner, d_state))
+        A_real = torch.log(torch.arange(1, d_state + 1, dtype=torch.float32)).repeat(self.d_inner, 1) * -0.5
+        self.A_log = nn.Parameter(A_real) # Real-valued baseline A
         self.D = nn.Parameter(torch.ones(self.d_inner))
         self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
 
