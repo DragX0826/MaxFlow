@@ -110,24 +110,29 @@ class PhysicsEngine:
     """Pure PyTorch Differentiable Physics for Gradient-Guided Optimization."""
     @staticmethod
     def compute_energy(pos_L, pos_P, q_L, q_P, dielectric=80.0):
-        # 1. Distances (Autograd friendly)
-        dist = torch.cdist(pos_L, pos_P) + 1e-6
+        # 1. Distances (Harden epsilon to prevent NaN)
+        dist = torch.cdist(pos_L, pos_P) + 1e-3
         
         # 2. Electrostatics (Coulomb)
         e_elec = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * dist)
         
-        # 3. VdW (Lennard-Jones Proxy: 12-6)
+        # 3. VdW (Lennard-Jones Proxy: 12-6) - Cap to prevent explosion
         sigma = 3.5
         inv_r6 = (sigma / dist) ** 6
         e_vdw = 0.15 * (inv_r6**2 - 2 * inv_r6)
         
-        return (e_elec + e_vdw).sum()
+        # [STABILITY] Cap individual energy terms at 1000.0 kcal/mol proxy
+        energy = (e_elec + e_vdw).clamp(min=-1000.0, max=1000.0).sum()
+        return energy
 
     @staticmethod
     def calculate_intra_repulsion(pos, threshold=1.2):
         if pos.size(0) < 2: return torch.tensor(0.0, device=pos.device)
         dist = torch.cdist(pos, pos) + torch.eye(pos.size(0), device=pos.device) * 10.0
-        return torch.relu(threshold - dist).pow(2).sum()
+        # Increase epsilon here too
+        dist = dist + 1e-3
+        rep = torch.relu(threshold - dist).pow(2).sum()
+        return rep.clamp(max=1000.0)
 
 # --- SECTION 3: MUON OPTIMIZER (MOMENTUM ORTHOGONALIZED) ---
 class Muon(torch.optim.Optimizer):
@@ -240,7 +245,10 @@ def run_absolute_truth_pipeline():
         out = model(data)
         
         # Differentiable Energy Calculation
-        next_pos = data.pos_L + out['v_pred'] * 0.1
+        # [STABILITY] Velocity update clamp: max 0.5 Angstrom per step
+        v_scaled = torch.clamp(out['v_pred'], min=-5.0, max=5.0) 
+        next_pos = data.pos_L + v_scaled * 0.1
+        
         energy = PhysicsEngine.compute_energy(next_pos, pos_P, q_L, q_P)
         repulsion = PhysicsEngine.calculate_intra_repulsion(next_pos)
         
@@ -248,7 +256,13 @@ def run_absolute_truth_pipeline():
         reward = -energy - 0.5 * repulsion
         loss = -reward # Minimize energy / Maximize reward
         
+        if torch.isnan(loss):
+            print(f"⚠️ [Step {step}] NaN detected in loss. Emergency break.")
+            break
+            
         loss.backward()
+        # [STABILITY] Gradient Clipping
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         
         history.append(reward.item())
