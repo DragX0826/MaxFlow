@@ -146,12 +146,16 @@ class PhysicsEngine:
         return energy
 
     @staticmethod
-    def calculate_intra_repulsion(pos, threshold=1.2):
+    def calculate_intra_repulsion(pos, threshold=1.2, softness=0.0):
         if pos.size(0) < 2: return torch.tensor(0.0, device=pos.device)
         dist = torch.cdist(pos, pos) + torch.eye(pos.size(0), device=pos.device) * 10.0
-        # Increase epsilon here too
-        dist = dist + 1e-3
-        rep = torch.relu(threshold - dist).pow(2).sum()
+        
+        # [SOTA] Soft-Core Repulsion: See effective distance
+        # When softness is high (200), effective dist is ~14A, so no repulsion triggers.
+        # When softness is 0, effective dist is real dist, repulsion triggers if < 1.2A.
+        dist_eff = torch.sqrt(dist.pow(2) + softness)
+        
+        rep = torch.relu(threshold - dist_eff).pow(2).sum()
         return rep.clamp(max=1000.0)
 
 # --- SECTION 3: MUON OPTIMIZER (MOMENTUM ORTHOGONALIZED) ---
@@ -288,7 +292,7 @@ def run_absolute_truth_pipeline():
         
         # Pass dynamic softness to Physics Engine
         energy = PhysicsEngine.compute_energy(next_pos, pos_P, q_L, q_P, softness=softness)
-        repulsion = PhysicsEngine.calculate_intra_repulsion(next_pos)
+        repulsion = PhysicsEngine.calculate_intra_repulsion(next_pos, softness=softness)
         
         # MaxRL Style Loss (Negative Reward)
         reward = -energy - 0.5 * repulsion
