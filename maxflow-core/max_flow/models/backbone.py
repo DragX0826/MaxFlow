@@ -123,11 +123,6 @@ class CrossGVP(nn.Module):
         self.ligand_encoder = GVPEncoder(node_in_dim, hidden_dim, num_layers)
         self.protein_encoder = GVPEncoder(21, hidden_dim, num_layers) 
         
-        # Core Transformer (Requires FlashTransformerLayer naming for weight alignment)
-        from max_flow.models.flash_attention import FlashTransformerLayer
-        self.transformer = FlashTransformerLayer(embed_dim=hidden_dim, num_heads=4, ff_dim=hidden_dim*4, dropout=0.1)
-        self.transformer_norm = nn.LayerNorm(hidden_dim)
-        
         # Global Context (Mamba-3)
         self.global_mixer = GlobalContextBlock(hidden_dim)
         
@@ -188,27 +183,7 @@ class CrossGVP(nn.Module):
         # 4. Global Context (Mamba-3)
         s_L = self.global_mixer(s_L, batch_idx=batch_idx)
         
-        # 5. Transformer (Batch-aware)
-        if batch_idx is not None:
-             num_graphs = batch_idx.max().item() + 1
-             counts = torch.bincount(batch_idx, minlength=num_graphs)
-             max_len = counts.max().item()
-             
-             graph_offsets = torch.zeros(num_graphs, dtype=torch.long, device=s_L.device)
-             graph_offsets.scatter_add_(0, batch_idx, torch.ones_like(batch_idx))
-             graph_offsets = torch.cat([torch.tensor([0], device=s_L.device), graph_offsets.cumsum(0)[:-1]])
-             rel_pos = torch.arange(s_L.size(0), device=s_L.device) - graph_offsets[batch_idx]
-             
-             s_L_padded = torch.zeros(num_graphs, max_len, s_L.size(-1), device=s_L.device, dtype=s_L.dtype)
-             s_L_padded[batch_idx, rel_pos] = s_L
-             
-             s_L_out = self.transformer(s_L_padded)
-             s_L = self.transformer_norm(s_L + s_L_out[batch_idx, rel_pos])
-        else:
-             s_L_out = self.transformer(s_L.unsqueeze(0))
-             s_L = self.transformer_norm(s_L + s_L_out.squeeze(0))
-
-        # 6. VIB (Information Bottleneck)
+        # 5. VIB (Information Bottleneck)
         if batch_idx is not None:
             batch_idx = batch_idx.view(-1)
             num_graphs = batch_idx.max().item() + 1

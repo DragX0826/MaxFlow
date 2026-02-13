@@ -97,12 +97,7 @@ try:
     from max_flow.data.featurizer import FlowData
     from max_flow.utils.chem import get_mol_from_data
     from max_flow.utils.metrics import compute_vina_score
-    print("✅ MaxFlow Package successfully imported.")
-except Exception as e:
-    print(f"⚠️ MaxFlow Package Import failed: {e}")
-    # For debugging: print the full traceback of the import failure
-    import traceback
-    traceback.print_exc()
+except ImportError:
     # Essential Fallback Utils for Kaggle Portability
     if 'get_mol_from_data' not in locals():
         def get_mol_from_data(data):
@@ -124,18 +119,6 @@ except Exception as e:
             dist = torch.cdist(pos_L, pos_P)
             min_dist = torch.min(dist, dim=1)[0]
             return -torch.mean(torch.exp(-min_dist))
-
-# Fallback Classes to prevent NameError if package fails
-if 'CrossGVP' not in locals():
-    class CrossGVP(torch.nn.Module):
-        def __init__(self, **kwargs):
-            super().__init__()
-            print("❌ Error: CrossGVP fallback used. Main package failed to load.")
-        def to(self, *args, **kwargs): return self
-if 'RectifiedFlow' not in locals():
-    class RectifiedFlow(torch.nn.Module):
-        def __init__(self, *args, **kwargs): super().__init__()
-        def to(self, *args, **kwargs): return self
 
 # Fallback FlowData
 if 'FlowData' not in locals():
