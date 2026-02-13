@@ -16,12 +16,11 @@ class GlobalContextBlock(nn.Module):
         super().__init__()
         # SOTA Fix: Align d_state=16 and bidirectional mapping with maxflow_pretrained.pt
         self.mamba = SimpleS6(d_model, d_state=16) 
-        self.norm = nn.LayerNorm(d_model)
 
     def forward(self, x, batch_idx=None):
         # Mamba-3 handles batch-aware padding/unpadding internally via batch_idx
-        x_out = self.mamba(x, batch_idx=batch_idx)
-        return self.norm(x + x_out)
+        # Checkpoint does NOT use post-norm residual for global context
+        return x + self.mamba(x, batch_idx=batch_idx)
 
 class GVPEncoder(nn.Module):
     """
