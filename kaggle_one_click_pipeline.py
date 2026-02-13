@@ -251,7 +251,9 @@ class MuonDemo(torch.optim.Optimizer):
                 if g.dim() > 1:
                     X = g.view(g.size(0), -1)
                     for _ in range(ns_steps):
-                        X.mul_(1.5).addmm_(X, X.t(), X, beta=-0.5)
+                        # X = 1.5 * X - 0.5 * X @ X.T @ X
+                        # Robust in-place update for different PyTorch versions
+                        X.addmm_(torch.mm(X, X.t()), X, beta=1.5, alpha=-0.5)
                     g = X.view_as(g)
                 p.add_(g, alpha=-lr)
 
@@ -263,10 +265,11 @@ print("   -> Optimizer: Muon (Momentum Orthogonalized) [SOTA 2025]")
 print("   -> Objective: Critic-Free MaxRL (GRPO-style Baseline)")
 
 print("   -> Starting 50-Step MaxRL optimization (ICLR Demo)...")
+STEPS = 50
 start_time = time.time()
 try:
     losses = []
-    for step in range(50):
+    for step in range(STEPS):
         optimizer.zero_grad()
         
         # Create Demo Batch (Batch size 4)
