@@ -16,11 +16,12 @@ class GlobalContextBlock(nn.Module):
         super().__init__()
         # SOTA Fix: Align d_state=16 and bidirectional mapping with maxflow_pretrained.pt
         self.mamba = SimpleS6(d_model, d_state=16) 
+        self.norm = nn.LayerNorm(d_model)
 
     def forward(self, x, batch_idx=None):
         # Mamba-3 handles batch-aware padding/unpadding internally via batch_idx
-        # Checkpoint uses direct Mamba output without post-norm residual
-        return x + self.mamba(x, batch_idx=batch_idx)
+        x_out = self.mamba(x, batch_idx=batch_idx)
+        return self.norm(x + x_out)
 
 class GVPEncoder(nn.Module):
     """
@@ -241,8 +242,6 @@ class CrossGVP(nn.Module):
             res['charge'] = torch.nan_to_num(self.charge_head(s_L))
             res['rmsf'] = torch.nan_to_num(self.flex_head(s_L))
             res['chiral'] = torch.nan_to_num(self.chiral_head(s_L))
-            res['concept'] = torch.nan_to_num(self.concept_head(s_L_global)) # Global context
-            res['atom_logits'] = torch.nan_to_num(self.atom_head(s_L))
 
         if return_latent:
              return res, confidence, kl_div, (s_L_global, s_P_global)

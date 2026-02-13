@@ -27,12 +27,21 @@ class ManifoldConstrainedHC(nn.Module):
         return torch.matmul(x, (I + self.epsilon * self.delta_d).T) + \
                torch.matmul(residual, (I + self.epsilon * self.delta_w).T)
 
+class GVPVectorNorm(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim, 3))
+        self.bias = nn.Parameter(torch.zeros(dim, 3))
+    def forward(self, x):
+        # x shape: [N, 16, 3]
+        return x * self.weight + self.bias
+
 class GVPCrossAttention(MessagePassing):
     """
     SOTA: Precision-Aligned Equivariant Cross-Attention.
-    - Matches [16, 16] v_v_proj weight ONLY (no bias).
-    - Matches [16, 64] v_gate weight/bias.
-    - Matches [16, 3] vector-norm weight/bias.
+    - v_v_proj: Checkpoint has bias.
+    - v_gate: Checkpoint has weight/bias.
+    - norm_v: Checkpoint has weight/bias of shape [16, 3].
     """
     def __init__(self, s_dim, v_dim, num_heads=4):
         super().__init__(aggr='add', flow='source_to_target')
@@ -42,21 +51,19 @@ class GVPCrossAttention(MessagePassing):
         self.q_proj = nn.Linear(s_dim, s_dim)
         self.k_proj = nn.Linear(s_dim, s_dim)
         self.v_s_proj = nn.Linear(s_dim, s_dim)
-        self.v_v_proj = nn.Linear(v_dim, v_dim, bias=False) # Checkpoint: bias=False
+        self.v_v_proj = nn.Linear(v_dim, v_dim, bias=True) # Checkpoint: bias=True (per log)
         self.o_proj = nn.Linear(s_dim, s_dim)
         
-        self.v_gate = nn.Sequential(nn.Linear(s_dim, v_dim)) # Matches [16, 64]
+        self.v_gate = nn.Sequential(nn.Linear(s_dim, v_dim)) 
         
         self.dist_bias = nn.Sequential(
-            nn.Linear(1, 32), # Matches [32, 1]
+            nn.Linear(1, 32),
             nn.SiLU(),
-            nn.Linear(32, num_heads) # Matches [4, 32]
+            nn.Linear(32, num_heads)
         )
         
         self.norm_s = nn.LayerNorm(s_dim)
-        # SOTA: GVP Vector Norm matching [16, 3] from checkpoint
-        self.norm_v = nn.Parameter(torch.ones(v_dim, 3))
-        self.norm_v_bias = nn.Parameter(torch.zeros(v_dim, 3))
+        self.norm_v = GVPVectorNorm(v_dim) # Matches norm_v.weight/bias
 
     def forward(self, s_L, v_L, pos_L, s_P, v_P, pos_P, batch_L, batch_P):
         return self.norm_s(s_L + self.o_proj(s_L)), v_L
@@ -64,9 +71,9 @@ class GVPCrossAttention(MessagePassing):
 class CausalMolSSM(nn.Module):
     """
     SOTA: Bidirectional Mamba-3 Trinity.
-    Perfect Alignment for:
+    Aligned for:
     - x_proj: [160, 128]
-    - bias=False for linear projections.
+    - bias=True for all linear projections (per checkpoint log).
     """
     def __init__(self, d_model, d_state=16, d_conv=4, expand=2, bidirectional=True):
         super().__init__()
@@ -75,21 +82,21 @@ class CausalMolSSM(nn.Module):
         self.bidirectional = bidirectional
 
         # Forward
-        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
+        self.in_proj = nn.Linear(d_model, self.d_inner * 2, bias=True) # Per log: bias exists
         self.conv1d = nn.Conv1d(self.d_inner, self.d_inner, d_conv, groups=self.d_inner, padding=d_conv-1)
-        self.x_proj = nn.Linear(self.d_inner, self.d_inner + d_state * 2, bias=False)
-        self.dt_proj = nn.Linear(self.d_inner, self.d_inner, bias=True) # dt always has bias
+        self.x_proj = nn.Linear(self.d_inner, self.d_inner + d_state * 2, bias=True) # 160 = 128 + 16 + 16
+        self.dt_proj = nn.Linear(self.d_inner, self.d_inner, bias=True)
         
-        self.A_log = nn.Parameter(torch.log(torch.arange(1, d_state + 1, dtype=torch.float32)).repeat(self.d_inner, 1) * -0.5)
+        self.A_log = nn.Parameter(torch.randn(self.d_inner, d_state))
         self.D = nn.Parameter(torch.ones(self.d_inner))
-        self.out_proj = nn.Linear(self.d_inner, d_model, bias=False)
+        self.out_proj = nn.Linear(self.d_inner, d_model, bias=True)
 
         if bidirectional:
-            self.bwd_in_proj = nn.Linear(d_model, self.d_inner * 2, bias=False)
+            self.bwd_in_proj = nn.Linear(d_model, self.d_inner * 2, bias=True)
             self.bwd_conv1d = nn.Conv1d(self.d_inner, self.d_inner, d_conv, groups=self.d_inner, padding=d_conv-1)
-            self.bwd_x_proj = nn.Linear(self.d_inner, self.d_inner + d_state * 2, bias=False)
+            self.bwd_x_proj = nn.Linear(self.d_inner, self.d_inner + d_state * 2, bias=True)
             self.bwd_dt_proj = nn.Linear(self.d_inner, self.d_inner, bias=True)
-            self.bwd_out_proj = nn.Linear(self.d_inner, d_model, bias=False)
+            self.bwd_out_proj = nn.Linear(self.d_inner, d_model, bias=True)
             self.fusion = nn.Linear(d_model * 2, d_model)
 
     def forward(self, x, batch_idx=None):

@@ -465,12 +465,9 @@ else:
 
 if len(real_scores) == 0:
     print("⚠️ No valid molecules generated. Table and plots will reflect real 0% success.")
-    mean_score = 0.0
-    success_rate_real = 0.0
-else:
+    mean_inference_time = np.mean(inference_times) if len(inference_times) > 0 else 0.0
     mean_score = np.mean(real_scores)
     success_rate_real = len([s for s in real_scores if s < -7.0]) / len(real_scores) * 100
-    mean_inference_time = np.mean(inference_times)
 
 print(f"📊 Real Metric Audit: Success={success_rate_real:.1f}%, Time={mean_inference_time:.4f}s")
 
