@@ -26,9 +26,26 @@ def auto_install_deps():
             missing.append(pkg)
     
     if missing:
-        print(f"🛠️  Missing dependencies found: {missing}. Installing...")
+        print(f"🛠️  Missing basic dependencies found: {missing}. Installing...")
         subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
-        print("✅ Dependencies Installed.")
+    
+    # [SOTA] Special Handling for Torch-Geometric (PyG)
+    try:
+        import torch_geometric
+    except ImportError:
+        print("🛠️  Installing Torch-Geometric (PyG) and friends...")
+        # Get PyTorch and CUDA versions for the index
+        torch_v = torch.__version__.split('+')[0]
+        cuda_v = 'cpu'
+        if torch.cuda.is_available():
+            cuda_v = 'cu' + torch.version.cuda.replace('.', '')
+        
+        # [KAGGLE] Rapid PyG installation via wheels
+        index_url = f"https://data.pyg.org/whl/torch-{torch_v}+{cuda_v}.html"
+        pkgs = ["torch-scatter", "torch-sparse", "torch-cluster", "torch-spline-conv", "torch-geometric"]
+        
+        subprocess.check_call([sys.executable, "-m", "pip", "install"] + pkgs + ["-f", index_url])
+        print("✅ SOTA Dependencies (PyG) Installed.")
 
 auto_install_deps()
 
