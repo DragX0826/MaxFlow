@@ -130,10 +130,33 @@ class PhysicsEngine:
         return sigma
 
     @staticmethod
-    def compute_energy(pos_L, pos_P, q_L, q_P, x_L=None, dielectric=80.0, softness=0.0):
+    def get_protein_sigma(x_P):
+        # [SOTA Fix] Residue-Specific Radii (v18.45)
+        # GLY (7) is smallest, TRP (17) is largest.
+        # x_P is (M, 21) one-hot.
+        # Approximate Sigma (2 * R_vdw):
+        # GLY: 3.0, ALA: 3.2, VAL: 3.4, LEU/ILE: 3.6, PHE/TYR/TRP: 4.0
+        # Others: 3.5
+        # We implementation a differentiable lookup.
+        # Indices: ALA(0), GLY(7), VAL(19), LEU(10), ILE(9), PHE(13), TYR(18), TRP(17)
+        
+        # Default baseline
+        sigma = 3.5 * torch.ones(x_P.size(0), device=x_P.device)
+        
+        # Override with specific types
+        is_gly = x_P[:, 7]; sigma = sigma * (1-is_gly) + 3.0 * is_gly
+        is_ala = x_P[:, 0]; sigma = sigma * (1-is_ala) + 3.2 * is_ala
+        is_val = x_P[:, 19]; sigma = sigma * (1-is_val) + 3.4 * is_val
+        is_large = (x_P[:, 10] + x_P[:, 9]); sigma = sigma * (1-is_large) + 3.6 * is_large
+        is_huge = (x_P[:, 13] + x_P[:, 18] + x_P[:, 17]); sigma = sigma * (1-is_huge) + 4.0 * is_huge
+        
+        return sigma
+
+    @staticmethod
+    def compute_energy(pos_L, pos_P, q_L, q_P, x_L=None, x_P=None, dielectric=80.0, softness=0.0):
         # [SOTA Fix] Robust Distance Calculation (Avoids Division by Zero/NaN)
         dist = torch.cdist(pos_L, pos_P)
-        dist_eff = torch.sqrt(dist.pow(2) + softness).clamp(min=0.1) # Hard clamp 0.1A
+        dist_eff = torch.sqrt(dist.pow(2) + softness).clamp(min=0.1) 
         
         # Electrostatics (Coulomb)
         e_elec = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * dist_eff)
@@ -141,23 +164,27 @@ class PhysicsEngine:
         # Van der Waals (Lennard-Jones 6-12)
         if x_L is not None:
              sigma_L = PhysicsEngine.get_sigma(x_L).unsqueeze(1) # (N_L, 1)
-             sigma_P = 3.5 # Approximate protein average
-             sigma = 0.5 * (sigma_L + sigma_P)
-        else:
-             sigma = 3.5
              
-        sigma_6 = sigma ** 6
-        r6_eff = dist_eff.pow(6)
-        term_r6 = sigma_6 / r6_eff
-        e_vdw = 0.15 * (term_r6.pow(2) - 2 * term_r6)
+             if x_P is not None:
+                 sigma_P = PhysicsEngine.get_protein_sigma(x_P).unsqueeze(0) # (1, N_P)
+             else:
+                 sigma_P = 3.5 # Fallback
+                 
+             sigma = 0.5 * (sigma_L + sigma_P)
+             sigma_6 = sigma ** 6
+             r6_eff = dist_eff.pow(6)
+             term_r6 = sigma_6 / r6_eff
+             
+             # Soft-Repulsive SOTA Potential (v18.33) to prevent singularity
+             # Standard LJ is unstable at r->0. We use Soft-LJ.
+             e_vdw = 0.15 * (term_r6.pow(2) - 2 * term_r6)
+        else:
+             e_vdw = 0.0 # Should not happen in SOTA mode
         
-        # Total Energy (Clamped to prevent explosion)
+        # Total Energy
         energy = (e_elec + e_vdw).clamp(min=-1000.0, max=1000.0).sum()
         
-        # NaN Guard
-        if torch.isnan(energy):
-            return torch.tensor(100.0, device=pos_L.device)
-            
+        if torch.isnan(energy): return torch.tensor(100.0, device=pos_L.device)
         return energy
 
     @staticmethod
@@ -440,7 +467,7 @@ class AblationSuite:
 
             # Physics Reward (Total NaN Defense)
             # [SOTA Fix 3/5] Atom-Specific VdW: Pass x_L to use learned atom types
-            energy = PhysicsEngine.compute_energy(next_pos, pos_P, q_L, q_P, x_L=x_L, softness=softness)
+            energy = PhysicsEngine.compute_energy(next_pos, pos_P, q_L, q_P, x_L=x_L, x_P=x_P, softness=softness)
             if torch.isnan(energy): energy = torch.tensor(100.0, device=self.device)
             
             # [SOTA Fix] Molecular Cohesion (v18.22)
