@@ -174,11 +174,11 @@ class MotifDecomposer:
                 omega = torque / inertia_scaler
                 
             v_rot[i] = omega
-                
-                # Rigid component at each atom: v_t + omega x r
-                v_rigid = v_t + torch.cross(omega.expand_as(r), r, dim=-1)
-                
-                # 3. Residual: Local deformation
-                v_local[mask] = v_sub - v_rigid
+            
+            # Rigid component at each atom: v_t + omega x r
+            v_rigid = v_t + torch.cross(omega.expand_as(r), r, dim=-1)
+            
+            # 3. Residual: Local deformation
+            v_local[mask] = v_sub - v_rigid
                 
         return v_trans, v_rot, v_local
