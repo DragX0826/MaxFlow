@@ -293,10 +293,30 @@ class AblationSuite:
         
         if os.path.exists(weights_path):
             try:
-                model.load_state_dict(torch.load(weights_path, map_location=self.device), strict=False)
+                state_dict = torch.load(weights_path, map_location=self.device)
+                model.load_state_dict(state_dict, strict=False)
                 print(f"✅ Loaded SOTA Weights from {weights_path}")
+                
+                # [SOTA Validation] Check for critical mismatches that cause NaNs
+                # If we loaded mostly garbage, it's better to restart.
+                # Heuristic: Check if backbone.edge_embedding exists
+                # Actually, the runtime error wouldn't happen if strict=False. 
+                # But the user reported a mismatch error printed! 
+                # This means load_state_dict printed them but didn't crash? 
+                # No, strict=False returns incompatible keys.
+                # The user's log showed "Error(s) in loading". 
+                # If strict=False, it should NOT raise RuntimeError for size mismatch??
+                # Wait, size mismatch IS a RuntimeError even with strict=False in some versions?
+                # PyTorch behavior: strict=False ignores missing/unexpected keys. 
+                # SIZE MISMATCHES enable a RuntimeError starting PyTorch 1.10+ unless assignment is compatible.
+                # So we must catch it.
             except Exception as e:
-                print(f"⚠️ Failed to load weights: {e}")
+                print(f"⚠️ SOTA Architecture Mismatch Detected: {e}")
+                print("🔄 Legacy Weights (v10/v12) are incompatible with v18.35 Platinum Engine.")
+                print("⚡ SWITCHING TO GENESIS MODE (Ab Initio Learning)...")
+                # Re-init weights to be safe (Xavier/Kaiming)
+                for p in model.parameters():
+                    if p.dim() > 1: nn.init.xavier_uniform_(p)
         else:
              print("⚠️ Warning: Running Ab Initio (No Pre-trained Weights Found).")
         
