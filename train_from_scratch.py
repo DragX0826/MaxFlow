@@ -107,18 +107,51 @@ class SOTADataset(torch.utils.data.Dataset):
                     pocket_center=center
                 )
                 
-                # Manual x_L extraction from HETATM (Simplified)
-                # We need to re-parse because featurizer output dropped it.
-                # Actually, let's just use the featurizer's structure object if possible?
-                # No, standard call returns tensors.
-                # Let's add a robust x_L generator based on 'native' size
-                # 167-dim feature: [C, N, O, S, F, P, Cl, Br, I, ...]
-                # We'll just assume Carbon (index 0) for now if parsing fails, 
-                # or random drug-like distribution to allow training to run.
-                # Real training would need correct element types.
-                x_L_sim = torch.zeros(native.size(0), 167)
-                x_L_sim[:, 0] = 1.0 # All Carbons (Scaffold)
-                data.x_L = x_L_sim
+                # [SOTA Fix] Real Ligand Featurization
+                # We re-parse the PDB to get element types for x_L
+                try:
+                    import Bio.PDB
+                    parser = Bio.PDB.PDBParser(QUIET=True)
+                    s = parser.get_structure(pdb, f"{pdb}.pdb")
+                    
+                    # Find the same HETATM residue as the featurizer did
+                    # Featurizer finds largest HETATM. We replicate logic.
+                    largest_res = None
+                    max_atoms = 0
+                    for model in s:
+                        for chain in model:
+                            for res in chain:
+                                if res.id[0].startswith('H_') and res.get_resname() not in ['HOH', 'WAT']:
+                                    if len(res) > max_atoms:
+                                        max_atoms = len(res)
+                                        largest_res = res
+                    
+                    if largest_res is None: raise ValueError("No ligand found")
+                    
+                    # Extract Elements
+                    # Map elements to one-hot indices: C, N, O, S, F, P, Cl, Br, I
+                    elem_map = {'C':0, 'N':1, 'O':2, 'S':3, 'F':4, 'P':5, 'CL':6, 'BR':7, 'I':8}
+                    x_L_real = torch.zeros(len(largest_res), 167)
+                    
+                    for i, atom in enumerate(largest_res):
+                        elem = atom.element.upper()
+                        idx = elem_map.get(elem, 9) # 9 = Other
+                        x_L_real[i, idx] = 1.0
+                        
+                    data.x_L = x_L_real
+                    
+                    # Sanity check: Align Sizes
+                    if data.pos_L.size(0) != data.x_L.size(0):
+                        # Force truncation if mismatch (rare but possible if featurizer skipped atoms)
+                        n = min(data.pos_L.size(0), data.x_L.size(0))
+                        data.pos_L = data.pos_L[:n]
+                        data.x_L = data.x_L[:n]
+                        
+                except Exception as e:
+                    print(f"⚠️ Ligand Parse Error ({pdb}): {e}. Using Carbon fallback.")
+                    x_L_sim = torch.zeros(native.size(0), 167)
+                    x_L_sim[:, 0] = 1.0
+                    data.x_L = x_L_sim
                 
                 self.data_list.append(data)
                 
