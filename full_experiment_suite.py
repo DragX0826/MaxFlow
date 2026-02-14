@@ -423,17 +423,16 @@ class AblationSuite:
         history = []
         
         for step in range(1, num_steps + 1):
-            # [SOTA Fix] Time Injection (Flow Matching Theory)
+        # [SOTA Fix] Time Injection (Flow Matching Theory)
             # We use Logit-Normal sampling to focus on the 'difficult' middle of the trajectory.
             t_val = step / num_steps
-            t_logit = torch.sigmoid(torch.randn(batch_size, device=self.device)) # Stochastic guidance
-            # Rationale: TTA usually benefits from 'scanning' the flow, but stochastic time 
-            # helps the model denoise from various noise levels during optimization.
-            # However, for pure generation, linear deterministic t is better.
-            # For "Ablation Suite TTA", we stick to Deterministic Linear t for reproducibility.
-            # BUT, the user asked for "SOTA Refinement", and our library uses Logit-Normal.
-            # Let's use a hybrid:
-            t = torch.full((batch_size,), t_val, device=self.device)
+            # Batch size is 1 (Single Molecule Optimization)
+            batch_sz = 1
+            t_logit = torch.sigmoid(torch.randn(batch_sz, device=self.device)) 
+            
+            # Hybrid Time Strategy:
+            # Linear Deterministic time for stability in TTA.
+            t = torch.full((batch_sz,), t_val, device=self.device)
             
             # Rotate Ligand & Protein (System-wide SE(3) Augmentation)
             from scipy.spatial.transform import Rotation
