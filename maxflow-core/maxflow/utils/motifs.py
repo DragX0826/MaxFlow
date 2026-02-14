@@ -148,12 +148,32 @@ class MotifDecomposer:
             r = p_sub - center
             torque = torch.cross(r, v_sub, dim=-1).sum(dim=0)
             
-            # Moment of Inertia Tensor (Simplified as scalar for first pass)
-            # I = sum (r^2)
-            inertia = (r * r).sum()
-            if inertia > 1e-6:
-                omega = torque / inertia # Angular velocity proxy
-                v_rot[i] = omega
+            # Moment of Inertia Tensor (3x3)
+            # I = sum (r^2 * I - r * r^T)
+            # Since mass=1 (approx), just geometric inertia.
+            r_sq = (r ** 2).sum(dim=-1, keepdim=True) # (N, 1)
+            I_mat = torch.zeros(3, 3, device=pos.device)
+            # Scatter add logic or loop (small set usually < 10 atoms)
+            # Vectorized:
+            # I = sum( r_sq * eye - r outer r )
+            eye = torch.eye(3, device=pos.device).unsqueeze(0) # (1, 3, 3)
+            r_outer = r.unsqueeze(2) * r.unsqueeze(1) # (N, 3, 3)
+            I_atoms = r_sq.unsqueeze(2) * eye - r_outer # (N, 3, 3)
+            I_tensor = I_atoms.sum(dim=0) # (3, 3)
+
+            # SOTA Phase 52 Fix: Use Pseudo-Inverse for stability
+            # omega = I_inv @ torque
+            # Add damping to diagonal for numerical stability
+            I_tensor = I_tensor + torch.eye(3, device=pos.device) * 1e-6
+            
+            try:
+                omega = torch.linalg.solve(I_tensor, torque)
+            except:
+                # Fallback to scalar approx if singular
+                inertia_scaler = r_sq.sum() + 1e-6
+                omega = torque / inertia_scaler
+                
+            v_rot[i] = omega
                 
                 # Rigid component at each atom: v_t + omega x r
                 v_rigid = v_t + torch.cross(omega.expand_as(r), r, dim=-1)

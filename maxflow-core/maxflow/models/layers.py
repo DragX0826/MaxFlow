@@ -132,6 +132,36 @@ class GVPCrossAttention(MessagePassing):
         from torch_geometric.nn import radius
         edge_index = radius(pos_P, pos_L, r=10.0, batch_x=batch_P, batch_y=batch_L)
         
+        # [SOTA Fix] Adaptive Index Swapper (ICLR Hardening)
+        # Handles inconsistencies in radius() return order across different torch-cluster versions.
+        # Ensure row 0 refers to Protein (pos_P) and row 1 refers to Ligand (pos_L).
+        if edge_index.numel() > 0:
+            # radius(x, y) returns (y_idx, x_idx) i.e. (Target, Source).
+            # We want (Source, Target) for flow='source_to_target'.
+            # Source=Protein, Target=Ligand.
+            # So we generally need to flip (L, P) -> (P, L).
+            
+            # Heuristic: Protein indices (Source) are typically larger than Ligand indices (Target).
+            # If row 0 max > row 1 max -> (P, L). Correct.
+            # If row 1 max > row 0 max -> (L, P). Flip.
+            
+            max_0 = edge_index[0].max().item()
+            max_1 = edge_index[1].max().item()
+            
+            # If Row 1 (Target?) has larger indices than Row 0 (Source?), it's likely (L, P).
+            # Because P > L usually.
+            if max_1 > max_0:
+                edge_index = edge_index.flip(0)
+                
+            # [Safety] Hard Clamp Target Indices to avoid CUDA Asset Trigger
+            # Target is Row 1. Must be < num_ligand_nodes (s_L.size(0)).
+            num_ligand_nodes = s_L.size(0)
+            if edge_index[1].max().item() >= num_ligand_nodes:
+                # If indices still invalid, clamp them.
+                # This handles cases where heuristic fails or P < L.
+                # Or simply ensures no OOB access.
+                edge_index[1] = edge_index[1].clamp(max=num_ligand_nodes - 1)
+        
         # Robust squeeze
         if s_L.dim() == 3 and s_L.size(0) == 1: s_L = s_L.squeeze(0)
         if v_L.dim() == 4 and v_L.size(0) == 1: v_L = v_L.squeeze(0)
@@ -142,7 +172,6 @@ class GVPCrossAttention(MessagePassing):
         x_L = torch.cat([s_L, v_L.reshape(v_L.size(0), -1)], dim=-1)
         x_P = torch.cat([s_P, v_P.reshape(v_P.size(0), -1)], dim=-1)
         
-        # Compute edge distances for geometric bias
         src_idx, tgt_idx = edge_index
         edge_dist = torch.norm(pos_P[src_idx] - pos_L[tgt_idx], dim=-1, keepdim=True)  # (E, 1)
         

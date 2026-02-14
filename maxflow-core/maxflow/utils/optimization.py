@@ -38,12 +38,20 @@ class Muon(torch.optim.Optimizer):
                     g = buf
 
                 # Newton-Schulz Iteration for Orthogonalization
-                # X_{k+1} = 1.5 * X_k - 0.5 * X_k * X_k^T * X_k
-                # This normalizes the gradient updates to be structurally efficient
+                # X_{k+1} = 1.5 * X_k - 0.5 * X_k * (X_k^T * X_k) or 1.5 X - 0.5 (X X^T) X
                 if g.dim() > 1:
                     X = g.view(g.size(0), -1)
-                    for _ in range(ns_steps):
-                        X.mul_(1.5).addmm_(X, X.t(), X, beta=-0.5)
+                    m, n = X.shape
+                    if m > n:
+                        # Orthogonalize columns
+                        for _ in range(ns_steps):
+                            M = X.t() @ X
+                            X.mul_(1.5).addmm_(X, M, alpha=-0.5)
+                    else:
+                        # Orthogonalize rows
+                        for _ in range(ns_steps):
+                            M = X @ X.t()
+                            X.mul_(1.5).addmm_(M, X, alpha=-0.5)
                     g = X.view_as(g)
                 
                 # Update weights

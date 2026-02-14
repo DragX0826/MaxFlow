@@ -29,6 +29,8 @@ class ProteinLigandFeaturizer:
         self.parser = PDBParser(QUIET=True)
         self.aa_to_idx = {aa: i for i, aa in enumerate(amino_acids)}
         self.decomposer = MotifDecomposer()
+        # [SOTA Fix] Coarse-Grained Electrostatics (Residue Charges)
+        self.charge_map = {'ARG': 1.0, 'LYS': 1.0, 'ASP': -1.0, 'GLU': -1.0, 'HIS': 0.5} # pH 7.4 approx
 
     def get_residue_features(self, structure):
         """
@@ -36,6 +38,7 @@ class ProteinLigandFeaturizer:
         """
         pos_list = []
         feat_list = []
+        charge_list = []
         metal_pos_list = []
         
         metals = {'ZN', 'FE', 'MN', 'CU', 'MG', 'CA'}
@@ -67,6 +70,10 @@ class ProteinLigandFeaturizer:
                             one_hot[-1] = 1.0 # Unknown
                         
                         feat_list.append(one_hot)
+                        
+                        # [SOTA Fix] Charge
+                        charge = self.charge_map.get(resname, 0.0)
+                        charge_list.append(charge)
                     
                     # SOTA Phase 32: Detect Metals (usually HETATMs)
                     elif residue.get_resname().strip().upper() in metals:
@@ -78,6 +85,7 @@ class ProteinLigandFeaturizer:
 
         return (torch.tensor(feat_list, dtype=torch.float32), 
                 torch.tensor(pos_list, dtype=torch.float32),
+                torch.tensor(charge_list, dtype=torch.float32),
                 torch.tensor(metal_pos_list, dtype=torch.float32) if metal_pos_list else None)
 
     def estimate_surface_normals(self, pos):
@@ -143,7 +151,7 @@ class ProteinLigandFeaturizer:
         except Exception:
             return None
             
-        x_P, pos_P, pos_metals = self.get_residue_features(structure)
+        x_P, pos_P, q_P, pos_metals = self.get_residue_features(structure)
         
         if x_P is None:
             return None
@@ -167,6 +175,7 @@ class ProteinLigandFeaturizer:
             edge_index_L=edge_index_L,
             x_P=x_P,
             pos_P=pos_P,
+            q_P=q_P, # [SOTA Fix] Explicit Charges
             normals_P=normals_P, # Pre-computed!
             pocket_center=pos_L.mean(dim=0, keepdim=True),
             atom_to_motif=atom_to_motif,

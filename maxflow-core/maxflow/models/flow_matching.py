@@ -43,8 +43,11 @@ class RectifiedFlow(nn.Module):
         device = data.x_L.device
         batch_size = data.num_graphs if hasattr(data, 'num_graphs') else 1
         
-        # 1. Sample time t ~ U[0, 1]
-        t = torch.rand(batch_size, device=device)
+        # 1. Sample time t ~ Logit-Normal(0, 1) (SOTA Phase 15)
+        # Focuses training on the "difficult" middle part of the flow trajectory.
+        # sigma=1.0 is standard for optimal transport flow matching.
+        t_raw = torch.randn(batch_size, device=device)
+        t = torch.sigmoid(t_raw)
         
         # 2. Robust Global Centering
         center_raw = data.pocket_center

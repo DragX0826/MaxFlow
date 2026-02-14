@@ -20,9 +20,15 @@ def get_optimizer(model, learning_rate=1e-4, weight_decay=0.01):
     SOTA Phase 55: Schedule-Free Optimizer Support.
     Returns standard AdamW; wrapper logic handles complexity.
     """
-    # SOTA Acceleration: Use Fused=True for faster updates if available
-    use_fused = torch.cuda.is_available() and hasattr(torch.optim, "AdamW")
-    return AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay, fused=use_fused)
+    # SOTA Acceleration: Use Muon (Momentum Orthogonalized) by default
+    try:
+        from maxflow.utils.optimization import Muon
+        # Muon doesn't use weight_decay in valid steps usually, but we pass it if needed or ignore
+        return Muon(model.parameters(), lr=learning_rate, momentum=0.95)
+    except ImportError:
+        # Fallback to Fused AdamW
+        use_fused = torch.cuda.is_available() and hasattr(torch.optim, "AdamW")
+        return AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay, fused=use_fused)
 
 def get_scheduler(optimizer, num_warmup_steps, num_training_steps):
     """Linear warmup followed by cosine decay."""

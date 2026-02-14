@@ -70,7 +70,13 @@ def train_reflow(
         accelerator.print("Compiling student with torch.compile...")
         student.backbone = torch.compile(student.backbone, mode="reduce-overhead")
         
-    optimizer = torch.optim.AdamW(student.parameters(), lr=lr)
+    try:
+        from maxflow.utils.optimization import Muon
+        optimizer = Muon(student.parameters(), lr=lr, momentum=0.95)
+        accelerator.print("✅ Optimizer: Muon (SOTA)")
+    except ImportError:
+        optimizer = torch.optim.AdamW(student.parameters(), lr=lr)
+        accelerator.print("⚠️ Optimizer: AdamW (Fallback)")
     
     # 3. Data Loader
     dataset = ReflowPairDataset(dataset_path)
@@ -92,9 +98,11 @@ def train_reflow(
             
             optimizer.zero_grad()
             
-            # Sample t uniformly U[0, 1] for each graph
+            # Sample t ~ Logit-Normal(0, 1) (SOTA Phase 15)
+            # t = sigmoid(randn)
             num_graphs = batch.num_graphs
-            t = torch.rand(num_graphs, device=device)
+            t_raw = torch.randn(num_graphs, device=device)
+            t = torch.sigmoid(t_raw)
             
             # Broadcast t to nodes
             batch_idx = getattr(batch, 'x_L_batch', getattr(batch, 'batch', None))
@@ -149,12 +157,5 @@ if __name__ == "__main__":
         epochs=args.epochs, batch_size=args.batch_size, lr=args.lr
     )
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, required=True, help="Path to reflow_dataset.pt")
-    parser.add_argument("--checkpoint", type=str, required=True, help="Teacher checkpoint")
-    parser.add_argument("--save_dir", type=str, default="checkpoints_reflow")
-    args = parser.parse_args()
-    
-    train_reflow(args.dataset, args.checkpoint, args.save_dir)
+
 
