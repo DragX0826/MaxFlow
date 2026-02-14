@@ -384,17 +384,22 @@ class AblationSuite:
         
         # 3. Genesis Initialization (Ab Initio)
         torch.manual_seed(42)
-        batch_size = 16
+        
+        # [SOTA Fix] Stoichiometry Matching (v18.46)
+        # We must generate the EXACT number of atoms as the native ligand.
+        # Hardcoding '16' was a Toy Model assumption.
+        num_atoms = pos_native.size(0)
+        print(f"✨ Genesis Mode: Generating {num_atoms}-atom molecule (matching Native)...")
         
         # [SOTA Fix] Chemical Evolution (v18.22)
         # Allow atom types (x_L) to evolve to fit the pocket chemistry!
         # Wrap as nn.Parameter for rigorous optimizer handling
-        x_L = nn.Parameter(torch.randn(batch_size, 167, device=self.device))
-        pos_L = pocket_center + torch.randn(batch_size, 3, device=self.device).detach() * 1.0 
+        x_L = nn.Parameter(torch.randn(num_atoms, 167, device=self.device))
+        pos_L = pocket_center + torch.randn(num_atoms, 3, device=self.device).detach() * 1.0 
         
         # [SOTA Fix] Ligand Charge Optimization (v18.21)
         # Initialize small random charges to break symmetry
-        q_L = nn.Parameter(torch.randn(batch_size, device=self.device) * 0.1)
+        q_L = nn.Parameter(torch.randn(num_atoms, device=self.device) * 0.1)
         data = FlowData(x_L=x_L, pos_L=pos_L, x_P=x_P, pos_P=pos_P, pocket_center=pocket_center)
 
         # 4. TTA Loop
