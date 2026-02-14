@@ -261,7 +261,39 @@ class AblationSuite:
         self.device = device
         self.feater = RealPDBFeaturizer()
         
+    # [SOTA Metric] Kabsch Alignment (RMSD)
+    # Computes optimal rotation to minimize RMSD between generated and native structure.
+    @staticmethod
+    def calculate_rmsd(pos1, pos2):
+        # Center both
+        c1 = pos1.mean(dim=0)
+        c2 = pos2.mean(dim=0)
+        p1 = pos1 - c1
+        p2 = pos2 - c2
+        
+        # Covariance matrix
+        H = torch.matmul(p1.T, p2)
+        
+        # SVD
+        try:
+            U, S, Vt = torch.linalg.svd(H)
+            d = torch.det(torch.matmul(Vt.T, U.T))
+            E = torch.eye(3, device=pos1.device)
+            E[2, 2] = d
+            R = torch.matmul(torch.matmul(Vt.T, E), U.T)
+            
+            # Rotate p1
+            p1_rot = torch.matmul(p1, R)
+            
+            # RMSD
+            diff = p1_rot - p2
+            rmsd = torch.sqrt((diff ** 2).sum() / pos1.size(0))
+            return rmsd
+        except:
+            return torch.tensor(99.9, device=pos1.device) # SVD Failure
+
     def run_configuration(self, name, pdb_id="7SMV", use_mamba=True, use_maxrl=True, use_muon=True):
+        # ... (rest of function signature matches existing)
         print(f"🚀 Running Ablation: {name} on {pdb_id}...")
         
         # 1. Setup Architecture
@@ -506,12 +538,12 @@ class AblationSuite:
             history.append(reward.mean().item()) 
             
             # [SOTA Metric] Chamfer Distance Logging (v18.24)
+            # [SOTA Metric] Aligned RMSD Logging (v18.24)
+            # We now use Kabsch alignment to report the TRUE structural error, ignoring global rotation.
             if step % 100 == 0:
                 with torch.no_grad():
-                     d1 = torch.cdist(data.pos_L, pos_native) # (N_gen, N_nat)
-                     # Bidirectional Symmetric Chamfer Distance
-                     cd = d1.min(dim=1)[0].mean() + d1.min(dim=0)[0].mean()
-                     print(f"Step {step}: Reward={history[-1]:.2f}, Chamfer Dist={cd.item():.2f}Å")
+                     rmsd = self.calculate_rmsd(data.pos_L, pos_native)
+                     print(f"Step {step}: Reward={history[-1]:.2f}, Aligned RMSD={rmsd.item():.2f}Å")
 
         # 5. Result Archival
         full_name = f"{name} ({pdb_id})"
