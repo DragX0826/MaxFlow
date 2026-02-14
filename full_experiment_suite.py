@@ -27,7 +27,14 @@ def auto_install_deps():
     
     if missing:
         print(f"🛠️  Missing basic dependencies found: {missing}. Installing...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install"] + missing)
+        # Resolve 'rdkit-pypi' conflict by installing meeko without deps (it relies on rdkit)
+        safe_missing = [p for p in missing if p != 'meeko']
+        if safe_missing:
+            subprocess.check_call([sys.executable, "-m", "pip", "install"] + safe_missing)
+        
+        if 'meeko' in missing:
+            print("Force-installing meeko (no-deps mode)...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "meeko", "--no-deps"])
     
     # [SOTA] Special Handling for Torch-Geometric (PyG Suite)
     try:
