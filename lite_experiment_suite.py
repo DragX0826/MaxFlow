@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v56.2 MaxFlow (ICLR 2026 Flexible Evolution Hotfix 2)"
+VERSION = "v56.3 MaxFlow (ICLR 2026 Flexible Evolution Hotfix 3)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1820,8 +1820,10 @@ class MaxFlowExperiment:
                 # [v56.0] Kernel-Smoothed Drift (Gaussian Smoothing for Singularities)
                 # Prevents "5-valent carbon" and explosive repulsive forces
                 sigma_smooth = 0.5 * softness # adaptive kernel width
+                # [v56.3 Hotfix] dist_sq.mean(dim=-1) is (B, N), unsqueeze(-1) makes it (B, N, 1)
                 kernel_weight = torch.exp(-dist_sq.mean(dim=-1).unsqueeze(-1) / (2 * sigma_smooth**2 + 1e-6))
-                force = force * kernel_weight.unsqueeze(-1)
+                # force is (B, N, 3), kernel_weight is (B, N, 1) - Correct broadcasting
+                force = force * kernel_weight
                 
                 torch.nan_to_num_(force, nan=0.0)
                 

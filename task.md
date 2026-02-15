@@ -234,3 +234,7 @@
 ## 52. The Kernel Hotfix (v56.2) [x]
 - [x] **NameError Fix**: Explicitly define `dist_sq` for Kernel-Smoothed Drift. [x]
 - [x] **Versioning**: Update VERSION to v56.2. [x]
+
+## 53. The Dimension Hotfix (v56.3) [x]
+- [x] **Broadcasting Fix**: Correct extra `unsqueeze` in Kernel scaling. [x]
+- [x] **Versioning**: Update VERSION to v56.3. [x]
