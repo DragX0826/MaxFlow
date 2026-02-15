@@ -205,3 +205,9 @@
 
 ## 47. ICLR 2026 Golden Submission [x]
 - [x] **Final Payload**: Deliver the absolute terminal ZIP and Technical Report. [x]
+
+## 48. Cybernetic Refinement (v55.3) [x]
+- [x] **Warm-up**: Implement 50-step unfolding phase (intra-only). [x]
+- [x] **PI Tuning**: Increase Kp to 5.0 and soften override scaling. [x]
+- [x] **Re-noising**: Implement Step 300 survivor logic (top 25%) and re-noising. [x]
+- [x] **Versioning**: Update VERSION to v55.3. [x]

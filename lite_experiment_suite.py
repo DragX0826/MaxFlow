@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v55.2 MaxFlow (ICLR 2026 Zenith Precision Edition)"
+VERSION = "v55.3 MaxFlow (ICLR 2026 Cybernetic Refinement Edition)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -278,7 +278,7 @@ class PhysicsEngine:
         
         # PI Controller State
         self.integral_error = 0.0 # Clash Debt
-        self.kp = 2.0             # Proportional Gain
+        self.kp = 5.0             # [v55.3] Increased Proportional Gain for aggressive braking
         self.ki = 0.1             # Integral Gain
 
     def reset_state(self):
@@ -331,7 +331,8 @@ class PhysicsEngine:
             
             # [Safety Override] Forced Hardening at optimization tail (Anti-Soft-Lock)
             if step_progress > 0.8:
-                decay = self.hardening_rate * (1.0 + 5.0 * (step_progress - 0.8))
+                # [v55.3] Softened override scaling (5.0 -> 2.0) to prevent energy explosions
+                decay = self.hardening_rate * (1.0 + 2.0 * (step_progress - 0.8))
             
             # Update Alpha State
             self.current_alpha = self.current_alpha * (1.0 - decay)
@@ -1663,6 +1664,28 @@ class MaxFlowExperiment:
                 temp = self.config.temp_start + progress * (self.config.temp_end - self.config.temp_start)
                 softness = self.config.softness_start + progress * (self.config.softness_end - self.config.softness_start)
                 
+                # [v55.3] Step 300 Multi-stage Re-noising (Strategic Exploration)
+                if step == 300:
+                    with torch.no_grad():
+                        # Evaluate current batch energies for survivor selection
+                        n_p_limit = min(200, pos_P.size(0))
+                        p_sub, q_sub, x_sub = pos_P[:n_p_limit], q_P[:n_p_limit], x_P[:n_p_limit]
+                        p_batched = p_sub.unsqueeze(0).repeat(B, 1, 1)
+                        q_batched = q_sub.unsqueeze(0).repeat(B, 1)
+                        x_batched = x_sub.unsqueeze(0).repeat(B, 1, 1)
+                        
+                        e_val = self.phys.compute_energy(pos_L, p_batched, q_L, q_batched, x_L, x_batched, progress)
+                        e_val_sum = e_val.sum(dim=(1,2)) if e_val.ndim == 3 else e_val.sum(dim=1)
+                        
+                        _, top_idx = torch.topk(e_val_sum, k=max(1, int(B*0.25)), largest=False)
+                        mask = torch.ones(B, dtype=torch.bool, device=device)
+                        mask[top_idx] = False
+                        
+                        if mask.any():
+                            logger.info(f"   🔄 [v55.3] Step 300 Re-noising: Kept {B - mask.sum()} survivors, re-noising {mask.sum()} others...")
+                            noise_new = torch.randn(mask.sum(), N, 3, device=device) * 2.0
+                            pos_L.data[mask] = p_center.view(1, 1, 3).repeat(mask.sum(), N, 1) + noise_new
+                
                 # [v35.7] ICLR PRODUCTION FIX: Initial Step 0 Vector Field
                 if step == 0:
                     try:
@@ -1758,7 +1781,11 @@ class MaxFlowExperiment:
                 e_bond = self.phys.calculate_internal_geometry_score(pos_L_reshaped)
                 e_hydro = self.phys.calculate_hydrophobic_score(pos_L_reshaped, x_L_for_physics, pos_P_batched, x_P_batched)
                 
-                batch_energy = e_inter_sum + e_intra + e_confine + e_bond - 0.5 * e_hydro
+                # [v55.3] Physical Warm-up Weight: 
+                # Gradually introduce protein-ligand interactions after ligand unfolding
+                warm_up = min(1.0, (step / 50.0)) if step < 50 else 1.0
+                
+                batch_energy = (e_inter_sum + e_bond - 0.5 * e_hydro) * warm_up + e_intra + e_confine
                 
                 # [v34.1] GRPO-MaxRL: Advantage-Weighted Flow Matching
                 # 1. Target Force from Physics
@@ -2356,14 +2383,14 @@ if __name__ == "__main__":
         
         # [AUTOMATION] Package everything for submission
         import zipfile
-        zip_name = f"MaxFlow_v55.2_Zenith_Precision.zip"
+        zip_name = f"MaxFlow_v55.3_Golden_Oral.zip"
         with zipfile.ZipFile(zip_name, "w") as z:
             files_to_zip = [f for f in os.listdir(".") if f.endswith((".pdf", ".pdb", ".tex"))]
             for f in files_to_zip:
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 MaxFlow v55.2 (ICLR 2026 Zenith Precision) Completed.")
+        print(f"\n🏆 MaxFlow v55.3 (ICLR 2026 Golden Oral Refinement) Completed.")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:
