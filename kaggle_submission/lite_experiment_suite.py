@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v59.2 MaxFlow (ICLR 2026 Golden Calculus Refined - Stability Patch)"
+VERSION = "v59.3 MaxFlow (ICLR 2026 Golden Calculus Refined - FAPE Correction)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -317,14 +317,15 @@ class PhysicsEngine:
         Returns Soft and Hard energy components. 
         Note: alpha update is now called externally via update_alpha.
         """
-        # [v59.1 Fix] Centric Alignment (FAPE-style)
-        # Shift both to common COM to avoid global jitters while calculating potentials
-        com_L = pos_L.mean(dim=1, keepdim=True) # (B, 1, 3)
-        com_P = pos_P.mean(dim=1, keepdim=True) # (B, 1, 3)
-        pos_L_aligned = pos_L - com_L
-        pos_P_aligned = pos_P - com_P
+        # [v59.3 Fix] Joint Centric Alignment (Corrected FAPE-style)
+        # Shift the entire system by its joint center of mass to preserve relative distances
+        combined_pos = torch.cat([pos_L, pos_P], dim=1) # (B, N+M, 3)
+        joint_com = combined_pos.mean(dim=1, keepdim=True) # (B, 1, 3)
+        pos_L_aligned = pos_L - joint_com
+        pos_P_aligned = pos_P - joint_com
         
-        dist = torch.cdist(pos_L_aligned, pos_P_aligned)
+        # [v59.3 Fix] Add 1e-8 epsilon to avoid zero-distance NaNs in grad
+        dist = torch.cdist(pos_L_aligned, pos_P_aligned) + 1e-8
         dist_sq = dist.pow(2)
         
         # 2. Van der Waals Param Retrieval
@@ -1747,6 +1748,11 @@ class MaxFlowExperiment:
         
         # [v54.1] Reset PI Controller State for this trajectory
         self.phys.reset_state()
+        
+        # [v59.3 Fix] Pre-initialize rewards/energy to prevent UnboundLocalError during early breaks
+        batch_energy = torch.zeros(B, device=device)
+        rewards = torch.zeros(B, device=device)
+        alpha = self.phys.current_alpha
         
         for step in range(start_step, self.config.steps):
             t_val = step / self.config.steps
