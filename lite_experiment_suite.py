@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v55.0 MaxFlow (ICLR 2026 PI-CAH Zenith Hardening)"
+VERSION = "v55.1 MaxFlow (ICLR 2026 PI-CAH Hotfix)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -254,6 +254,10 @@ class ForceFieldParameters:
         # Angle Constraints
         self.angle_mean = np.deg2rad(109.5) # Tetrahedral
         self.angle_k = 100.0 # kcal/mol/rad^2
+        
+        # [v55.1 Hotfix] Simulation Softness Defaults
+        self.softness_start = 5.0
+        self.softness_end = 0.0
 
 class PhysicsEngine:
     """
@@ -1508,7 +1512,12 @@ class MaxFlowExperiment:
     def __init__(self, config: SimulationConfig):
         self.config = config
         self.featurizer = RealPDBFeaturizer()
-        self.phys = PhysicsEngine(ForceFieldParameters())
+        
+        # [v55.1 Hotfix] Synchronize Physics with Simulation Hyperparameters
+        ff_params = ForceFieldParameters()
+        ff_params.softness_start = config.softness_start
+        ff_params.softness_end = config.softness_end
+        self.phys = PhysicsEngine(ff_params)
         self.visualizer = PublicationVisualizer()
         self.results = []
         
@@ -2343,14 +2352,14 @@ if __name__ == "__main__":
         
         # [AUTOMATION] Package everything for submission
         import zipfile
-        zip_name = f"MaxFlow_v55.0_Golden_Submission.zip"
+        zip_name = f"MaxFlow_v55.1_Zenith_Hotfix.zip"
         with zipfile.ZipFile(zip_name, "w") as z:
             files_to_zip = [f for f in os.listdir(".") if f.endswith((".pdf", ".pdb", ".tex"))]
             for f in files_to_zip:
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 MaxFlow v55.0 (ICLR 2026 PI-CAH Zenith) Completed.")
+        print(f"\n🏆 MaxFlow v55.1 (ICLR 2026 PI-CAH Zenith Hotfix) Completed.")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:

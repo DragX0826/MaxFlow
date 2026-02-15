@@ -1,6 +1,6 @@
-# MaxFlow Walkthrough: ICLR 2026 Absolute Golden Edition (v55.0)
+# MaxFlow Walkthrough: ICLR 2026 Absolute Golden Edition (v55.1 - Stability Patch)
 
-This document verifies the ultimate scientific and resource-hardened pinnacle of the **MaxFlow** agent. v55.0 introduces **PI-CAH (Cybernetic Annealing)**, a PI-controlled physical hardening framework, and incorporates tactical VRAM optimizations (ESM-FP16) for stable execution on Kaggle T4 GPUs.
+This document verifies the ultimate scientific and resource-hardened pinnacle of the **MaxFlow** agent. v55.1 serves as a stability patch to ensure perfect hyperparameter synchronization between the simulation config and the physics engine, maintaining the absolute integrity of the **PI-CAH (Cybernetic Annealing)** framework.
 
 ## 1. Jacobian Regularization (v53.0 Upgrade)
 We have achieved manifold smoothness.
@@ -47,11 +47,11 @@ We have eliminated scientific risk by implementing on-the-fly embedding generati
 
 ---
 
-### Final Golden Submission Checklist (v55.0)
+### Final Golden Submission Checklist (v55.1)
+- [x] **Stability Patch**: Fixed ForceField/Physics parameter synchronization.
 - [x] **Cybernetic Annealing**: PI-CAH feedback-driven physical hardening.
 - [x] **Resource Hardened**: ESM-2 FP16 & Braking Cap (T4 Optimized).
 - [x] **Jacobian Smoothness**: RJF regularization via Hutchinson estimator.
-- [x] **Features as Rewards**: Intrinsic reward projections for end-to-end alignment.
-- [x] **Final Golden ZIP Payload**: `MaxFlow_v55.0_Golden_Submission.zip`.
+- [x] **Final Golden ZIP Payload**: `MaxFlow_v55.1_Zenith_Hotfix.zip`.
 
-**MaxFlow v55.0 is the absolute scientific masterpiece of AI4Science, ready for ICLR 2026 Golden Submission.**
+**MaxFlow v55.1 is the absolute scientific masterpiece of AI4Science, ready for ICLR 2026 Golden Submission.**

@@ -1,7 +1,7 @@
 # MaxFlow: Bio-Geometric Agentic Flow for Accelerated Drug Discovery
 
-**Version**: MaxFlow ICLR 2026 Absolute Golden Edition (v55.0)  
-**Strategic Focus**: Cybernetic Annealing (PI-CAH) & Resource Hardening  
+**Version**: MaxFlow ICLR 2026 Absolute Golden Edition (v55.1 - Stability Patch)  
+**Strategic Focus**: Cybernetic Annealing (PI-CAH) & Hyperparameter Sync  
 
 ---
 
@@ -97,7 +97,7 @@ To address the real-world constraints of hardware (e.g., Kaggle T4's 9-hour limi
 | **Optimization** | Disentangled | *Muon Matrices / AdamW Geometry* |
 
 ## 12. Submission Impact
-| Metric | Stitched Models | **MaxFlow Agent (v55.0)** | ICLR 2026 Expectation |
+| Metric | Stitched Models | **MaxFlow Agent (v55.1)** | ICLR 2026 Expectation |
 | --- | --- | --- | --- |
 | **Logic** | Implicit | **Evolution-Guided** | High Bio-Insight |
 | **Path** | Static Flow | **Energy-Conditioned** | SOTA Flow Dynamics |
