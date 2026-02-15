@@ -186,5 +186,11 @@
 - [x] **Functional Refactor**: Remove state-based alpha from PhysicsEngine. [x]
 - [x] **Versioning**: Update VERSION to v53.1. [x]
 
-## 44. ICLR 2026 Golden Manifest [x]
-- [x] **Total Zenith**: The absolute definitive ICLR 2026 AI4Science submission. [x]
+## 44. PI-Controlled Physics (v54.1) [/]
+- [ ] **PI Controller**: Implement Kp/Ki logic for alpha decay in PhysicsEngine. [ ]
+- [ ] **Anti-SoftLock**: Add safety override for final-stage hardening (progress > 0.8). [ ]
+- [ ] **Intensive Scaling**: Standardize clash metrics using `mean()` to fix scaling. [ ]
+- [ ] **Versioning**: Update VERSION to v54.1. [ ]
+
+## 45. ICLR 2026 Golden Manifest [ ]
+- [ ] **Absolute Zenith**: The definitive control-theoretic AI4Science submission.

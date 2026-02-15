@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v53.1 MaxFlow (ICLR 2026 Curvature-Adaptive Soft-Flow)"
+VERSION = "v54.1 MaxFlow (ICLR 2026 PI-Controlled Soft-Flow)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -265,14 +265,26 @@ class PhysicsEngine:
     """
     def __init__(self, ff_params: ForceFieldParameters):
         self.params = ff_params
-        # [v53.1] CAH Hyperparameters based on Drifting Theory
-        self.clash_sensitivity = 0.5 # Gamma (Geometric Sensitivity)
+        # [v54.1] PI-Controlled Hardening (PID Framework)
+        # Objectives: Fast convergence, No Soft-Lock, Scaling Invariance.
+        self.current_alpha = self.params.softness_start
+        self.hardening_rate = 0.1 # Base rate
+        
+        # PI Controller State
+        self.integral_error = 0.0 # Clash Debt
+        self.kp = 2.0             # Proportional Gain
+        self.ki = 0.1             # Integral Gain
+
+    def reset_state(self):
+        """Reset PI controller state for new trajectory."""
+        self.current_alpha = self.params.softness_start
+        self.integral_error = 0.0
 
     # [FIX] Renamed to match call site (compute_energy)
     def compute_energy(self, pos_L, pos_P, q_L, q_P, x_L, x_P, step_progress=0.0):
         """
-        [v53.1] Robust Curvature-Adaptive Hardening (CAH).
-        Fixes scale sensitivity and state synchronization issues.
+        [v54.1] PI-Controlled Curvature-Adaptive Hardening.
+        Handles physical singularites via a feedback loop.
         """
         # 1. Pairwise Distances
         if pos_P.dim() == 2:
@@ -281,7 +293,7 @@ class PhysicsEngine:
         dist = torch.cdist(pos_L, pos_P)
         dist_sq = dist.pow(2)
         
-        # 2. Van der Waals Param Retrieval (Mixed Rule)
+        # 2. Van der Waals Param Retrieval
         type_probs_L = x_L[..., :9]
         radii_L = type_probs_L @ self.params.vdw_radii[:9]
         if x_P.dim() == 2: x_P = x_P.unsqueeze(0)
@@ -289,32 +301,38 @@ class PhysicsEngine:
         radii_P = (x_P[..., :4] @ prot_radii_map)
         sigma_ij = radii_L.unsqueeze(-1) + radii_P.unsqueeze(1)
         
-        # --- CAH Logic Start (v53.1) ---
-        # 3. Normalized Clash Metric (Functional Approach)
+        # --- v54.1 PI-Controlled CAH Logic ---
         with torch.no_grad():
+            # Error Signal: Normalized Clash Score (Intensive Property)
             overlap_mask = dist_sq < sigma_ij.pow(2)
             if overlap_mask.any():
                 raw_clash = (sigma_ij[overlap_mask].pow(2) / (dist_sq[overlap_mask] + 1e-6))
-                # Mean normalized clash score (Fixes Bug 3: Atomic Scale Sensitivity)
-                avg_clash_score = torch.mean(raw_clash - 1.0)
+                error_signal = torch.mean(raw_clash - 1.0)
             else:
-                avg_clash_score = torch.tensor(0.0, device=dist.device)
-            
-            # 4. Adaptive Alpha Calculation
-            # Linear baseline (保底線)
-            base_alpha = self.params.softness_start * (1.0 - step_progress) + self.params.softness_end * step_progress
-            # Braking factor based on local geometry curvature
-            adaptive_factor = 1.0 + self.clash_sensitivity * avg_clash_score
-            
-            # Final effective alpha (Functional, no internal state for DDP consistency)
-            effective_alpha = torch.clamp(base_alpha * adaptive_factor, 
-                                          min=self.params.softness_end, 
-                                          max=self.params.softness_start)
-        # --- CAH Logic End ---
+                error_signal = torch.tensor(0.0, device=dist.device)
 
-        # 5. Electrostatics (Coulomb)
+            # PI Control Law
+            p_term = self.kp * error_signal
+            self.integral_error = 0.9 * self.integral_error + 0.1 * error_signal # Exponential Integral
+            i_term = self.ki * self.integral_error
+            
+            # Braking Factor
+            braking = 1.0 + p_term + i_term
+            decay = self.hardening_rate / braking
+            
+            # [Safety Override] Forced Hardening at optimization tail (Anti-Soft-Lock)
+            if step_progress > 0.8:
+                decay = self.hardening_rate * (1.0 + 5.0 * (step_progress - 0.8))
+            
+            # Update Alpha State
+            self.current_alpha = self.current_alpha * (1.0 - decay)
+            self.current_alpha = max(self.current_alpha, self.params.softness_end)
+            
+        # --- End PI Logic ---
+
+        # 3. Electrostatics (Coulomb)
         dielectric = 4.0 
-        soft_dist_sq = dist_sq + effective_alpha * sigma_ij.pow(2)
+        soft_dist_sq = dist_sq + self.current_alpha * sigma_ij.pow(2)
         
         if q_L.dim() == 2: # (Batch, N)
              q_L_exp = q_L.unsqueeze(2) # (B, N, 1)
@@ -323,9 +341,8 @@ class PhysicsEngine:
         else: # (N,)
              e_elec = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * torch.sqrt(soft_dist_sq))
         
-        # 6. Soft-Core LJ Potentials
-        sc_sigma_sq = sigma_ij.pow(2)
-        inv_sc_dist = sc_sigma_sq / (dist_sq + effective_alpha * sc_sigma_sq + 1e-6)
+        # 4. Van der Waals (Soft-Core LJ)
+        inv_sc_dist = sigma_ij.pow(2) / (dist_sq + self.current_alpha * sigma_ij.pow(2) + 1e-6)
         
         term_r6 = inv_sc_dist.pow(6)
         term_r3 = inv_sc_dist.pow(3)
@@ -1605,6 +1622,9 @@ class MaxFlowExperiment:
         # 3. Main Optimization Loop
         logger.info(f"   Running {self.config.steps} steps of Optimization...")
         
+        # [v54.1] Reset PI Controller State for this trajectory
+        self.phys.reset_state()
+        
         for step in range(start_step, self.config.steps):
             t_val = step / self.config.steps
             t_input = torch.full((B,), t_val, device=device)
@@ -2318,14 +2338,14 @@ if __name__ == "__main__":
         
         # [AUTOMATION] Package everything for submission
         import zipfile
-        zip_name = f"MaxFlow_v53.1_CAH_Adaptive.zip"
+        zip_name = f"MaxFlow_v54.1_PI_Controlled.zip"
         with zipfile.ZipFile(zip_name, "w") as z:
             files_to_zip = [f for f in os.listdir(".") if f.endswith((".pdf", ".pdb", ".tex"))]
             for f in files_to_zip:
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 MaxFlow v53.1 (ICLR 2026 Soft-Flow Master) Completed.")
+        print(f"\n🏆 MaxFlow v54.1 (ICLR 2026 PI-Controlled Zenith) Completed.")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:
