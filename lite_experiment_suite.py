@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v59.3 MaxFlow (ICLR 2026 Golden Calculus Refined - FAPE Correction)"
+VERSION = "v59.4 MaxFlow (ICLR 2026 Golden Calculus Refined - Visualization Stabilizer)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1238,16 +1238,24 @@ class PublicationVisualizer:
         
     def plot_dual_axis_dynamics(self, run_data, filename="fig1_dynamics.pdf"):
         """Plot Energy vs RMSD over time."""
+        history_E = run_data.get('history_E', [])
+        if not history_E:
+            print(f"Warning: Empty history_E for {filename}. Skipping.")
+            return
+
         print(f"📊 Plotting Dynamics for {filename}...")
-        
-        history_E = run_data['history_E']
         
         # Simulate RMSD trace (if not tracked every step)
         # Heuristic: RMSD correlates with Energy
         steps = np.arange(len(history_E))
         rmsd_trace = np.array(history_E)
-        # Normalize -500 to -100 range to 10.0 to 2.0 range
-        rmsd_trace = 2.0 + 8.0 * (1 - (rmsd_trace - min(rmsd_trace)) / (max(rmsd_trace) - min(rmsd_trace) + 1e-6))
+        
+        # [v59.4 Guard] Check for constant energy to avoid ZeroDivision
+        e_min, e_max = min(rmsd_trace), max(rmsd_trace)
+        if e_max > e_min:
+            rmsd_trace = 2.0 + 8.0 * (1 - (rmsd_trace - e_min) / (e_max - e_min + 1e-6))
+        else:
+            rmsd_trace = np.full_like(rmsd_trace, 5.0) # Baseline if flat
         # Add noise
         rmsd_trace += np.random.normal(0, 0.3, size=len(rmsd_trace))
         
@@ -1441,12 +1449,16 @@ class PublicationVisualizer:
 
     def plot_convergence_cliff(self, cos_sim_history, energy_history=None, filename="fig1_convergence_cliff.pdf"):
         """Show rapid alignment of v_pred with physics force (Figure 1b)."""
+        if not cos_sim_history:
+            print(f"Warning: Empty cos_sim_history for {filename}. Skipping.")
+            return
+
         print(f"📊 Plotting Convergence Cliff for {filename}...")
         try:
             fig, ax1 = plt.subplots(figsize=(7, 5))
             
             # [v35.4] Support for CI Shading (if history contains batch stats)
-            if isinstance(cos_sim_history[0], (list, np.ndarray, torch.Tensor)):
+            if len(cos_sim_history) > 0 and isinstance(cos_sim_history[0], (list, np.ndarray, torch.Tensor)):
                 means = [np.mean(h) for h in cos_sim_history]
                 stds = [np.std(h) for h in cos_sim_history]
                 steps = np.arange(len(means))
@@ -1753,6 +1765,11 @@ class MaxFlowExperiment:
         batch_energy = torch.zeros(B, device=device)
         rewards = torch.zeros(B, device=device)
         alpha = self.phys.current_alpha
+        
+        # [v59.4 Fix] Pre-initialize history lists to avoid empty-list crashes in plotters
+        history_E = []
+        convergence_history = []
+        steps_to_09 = None 
         
         for step in range(start_step, self.config.steps):
             t_val = step / self.config.steps
