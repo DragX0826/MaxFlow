@@ -1,0 +1,438 @@
+2026-02-14 17:27:08,160 - MaxFlowv21 - INFO -    Running 10 steps of Optimization...
+2026-02-14 17:28:39,280 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 17:29:38,029 - MaxFlowv21 - INFO -    Running 2 steps of Optimization...
+2026-02-14 17:30:59,446 - MaxFlowv21 - INFO -    Running 2 steps of Optimization...
+2026-02-14 17:30:59,651 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 982, in <module>
+    exp_muon.run()
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 778, in run
+    e_inter = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L_reshaped, q_P_batched,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 196, in compute_energy
+    radii_L = type_probs @ self.params.vdw_radii[:9] # (N,) differentiable!
+              ~~~~~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~
+RuntimeError: size mismatch, got input (9), mat (9x167), vec (9)
+
+2026-02-14 17:38:11,952 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 17:38:12,173 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 982, in <module>
+    exp_muon.run()
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 778, in run
+    e_inter = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L_reshaped, q_P_batched,
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 203, in compute_energy
+    term_r6 = (sigma_ij / dist_eff).pow(6)
+               ~~~~~~~~~^~~~~~~~~~
+RuntimeError: The size of tensor a (118) must match the size of tensor b (598) at non-singleton dimension 2
+
+2026-02-14 17:38:56,582 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 17:38:56,780 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 982, in <module>
+    exp_muon.run()
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 789, in run
+    total_E = e_inter.sum(dim=-1) + e_intra + e_confine if e_inter.ndim > 1 else e_inter + e_intra + e_confine
+              ~~~~~~~~~~~~~~~~~~~~^~~~~~~~~
+RuntimeError: The size of tensor a (118) must match the size of tensor b (2) at non-singleton dimension 1
+
+2026-02-14 17:39:49,307 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 17:39:49,588 - MaxFlowv21 - INFO -    Step 0: Loss=87.93, Temp=1.00
+2026-02-14 17:39:54,198 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 17:39:54,375 - MaxFlowv21 - INFO -    Step 0: Loss=120.30, Temp=1.00
+2026-02-14 17:39:57,908 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 17:39:58,064 - MaxFlowv21 - INFO -    Step 0: Loss=29.98, Temp=1.00
+2026-02-14 17:39:59,799 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 17:39:59,863 - MaxFlowv21 - INFO -    Step 0: Loss=45.48, Temp=1.00
+2026-02-14 17:47:12,213 - MaxFlowv21 - INFO -    Running 100 steps of Optimization...
+2026-02-14 17:47:12,681 - MaxFlowv21 - INFO -    Step 0: Loss=104.26, E_min=26.25, Temp=1.00
+2026-02-14 17:47:27,312 - MaxFlowv21 - INFO -    Running 100 steps of Optimization...
+2026-02-14 17:47:27,490 - MaxFlowv21 - INFO -    Step 0: Loss=111.01, E_min=38.03, Temp=1.00
+2026-02-14 17:54:10,765 - MaxFlowv21 - INFO -    Running 100 steps of Optimization...
+2026-02-14 17:54:10,910 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 1122, in <module>
+    exp_muon.run()
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 864, in run
+    out = model(data, t=t_input, pos_L=pos_L)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 575, in forward
+    return self.model(data, t, pos_L)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 556, in forward
+    s, v = gvp(s, v)
+           ^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Drug\kaggle_submission\full_experiment_suite.py", line 377, in forward
+    v_out = self.v_proj(v.transpose(-1, -2)).transpose(-1, -2) # (B, N, D_out, 3)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\linear.py", line 125, in forward
+    return F.linear(input, self.weight, self.bias)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: mat1 and mat2 shapes cannot be multiplied (1416x16 and 1x16)
+
+2026-02-14 17:56:21,827 - MaxFlowv21 - INFO -    Running 50 steps of Optimization...
+2026-02-14 17:56:22,384 - MaxFlowv21 - INFO -    Step 0: Loss=262654.97, E_min=26.25, Temp=1.00
+2026-02-14 17:56:39,650 - MaxFlowv21 - INFO -    Running 50 steps of Optimization...
+2026-02-14 17:56:39,951 - MaxFlowv21 - INFO -    Step 0: Loss=1888.36, E_min=34.86, Temp=1.00
+2026-02-14 18:02:30,122 - MaxFlowv21 - INFO -    Running 50 steps of Optimization...
+2026-02-14 18:02:30,662 - MaxFlowv21 - INFO -    Step 0: Loss=30488.94, E_min=16.18, Temp=1.00
+2026-02-14 18:03:18,491 - MaxFlowv21 - INFO -    Running 50 steps of Optimization...
+2026-02-14 18:03:20,074 - MaxFlowv21 - INFO -    Step 0: Loss=21391.07, E_min=13.35, Temp=1.00
+2026-02-14 21:26:40,065 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:26:40,571 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1785, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1220, in run
+    out_0 = model(None, t=t_0, pos_L=pos_L, x_P=x_P, pos_P=pos_P, batch=torch.zeros(B*N, dtype=torch.long, device=device))
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: RectifiedFlow.forward() got an unexpected keyword argument 'batch'
+
+2026-02-14 21:27:42,183 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:27:42,680 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1786, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1221, in run
+    out_0 = model(data_0, t=t_0, pos_L=pos_L, x_P=x_P, pos_P=pos_P)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 812, in forward
+    return self.model(data, t, pos_L, x_P, pos_P)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 792, in forward
+    s_padded[b, :n] = s[idx]
+    ~~~~~~~~^^^^^^^
+TypeError: slice indices must be integers or None or have an __index__ method
+
+2026-02-14 21:28:39,533 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:28:40,000 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1789, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1224, in run
+    out_0 = model(data_0, t=t_0, pos_L=pos_L, x_P=x_P, pos_P=pos_P)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 815, in forward
+    return self.model(data, t, pos_L, x_P, pos_P)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1739, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\user\AppData\Local\Programs\Python\Python312\Lib\site-packages\torch\nn\modules\module.py", line 1750, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 795, in forward
+    s_padded[b, :n] = s[idx]
+    ~~~~~~~~^^^^^^^
+TypeError: slice indices must be integers or None or have an __index__ method
+
+2026-02-14 21:30:55,517 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:31:06,690 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:31:08,270 - MaxFlowv21 - INFO -    Step 0: Loss=302354.78, E_min=63.54, Temp=1.00
+2026-02-14 21:31:16,208 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 21:31:18,014 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:31:19,427 - MaxFlowv21 - INFO -    Step 0: Loss=418925.16, E_min=166.36, Temp=1.00
+2026-02-14 21:31:27,267 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 21:31:28,931 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:31:30,495 - MaxFlowv21 - INFO -    Step 0: Loss=369794.47, E_min=42.11, Temp=1.00
+2026-02-14 21:31:38,372 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1783, in <module>
+    generate_master_report(all_results)
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1552, in generate_master_report
+    e = res['final']
+        ~~~^^^^^^^^^
+KeyError: 'final'
+
+2026-02-14 21:32:31,977 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:32:38,961 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:32:40,425 - MaxFlowv21 - INFO -    Step 0: Loss=302354.78, E_min=63.54, Temp=1.00
+2026-02-14 21:32:48,104 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 21:32:49,927 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:32:51,516 - MaxFlowv21 - INFO -    Step 0: Loss=418925.16, E_min=166.36, Temp=1.00
+2026-02-14 21:32:59,283 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 21:33:00,838 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:33:02,372 - MaxFlowv21 - INFO -    Step 0: Loss=369794.47, E_min=42.11, Temp=1.00
+2026-02-14 21:33:10,121 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1781, in <module>
+    generate_master_report(all_results)
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1585, in generate_master_report
+    "Target": res['pdb'],
+              ~~~^^^^^^^
+KeyError: 'pdb'
+
+2026-02-14 21:33:59,594 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:34:07,101 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:34:08,568 - MaxFlowv21 - INFO -    Step 0: Loss=302354.78, E_min=63.54, Temp=1.00
+2026-02-14 21:34:16,270 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 21:34:18,054 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:34:19,481 - MaxFlowv21 - INFO -    Step 0: Loss=418925.16, E_min=166.36, Temp=1.00
+2026-02-14 21:34:27,449 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 21:34:29,034 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:34:30,515 - MaxFlowv21 - INFO -    Step 0: Loss=369794.47, E_min=42.11, Temp=1.00
+2026-02-14 21:34:38,397 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1781, in <module>
+    generate_master_report(all_results)
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1594, in generate_master_report
+    "Stereo": stereo_valid,
+              ^^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'stereo_valid' where it is not associated with a value
+
+2026-02-14 21:35:10,221 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:35:17,099 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:35:18,539 - MaxFlowv21 - INFO -    Step 0: Loss=302354.78, E_min=63.54, Temp=1.00
+2026-02-14 21:35:26,019 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 21:35:27,807 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:35:29,199 - MaxFlowv21 - INFO -    Step 0: Loss=418925.16, E_min=166.36, Temp=1.00
+2026-02-14 21:35:36,807 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 21:35:38,299 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:35:39,693 - MaxFlowv21 - INFO -    Step 0: Loss=369794.47, E_min=42.11, Temp=1.00
+2026-02-14 21:35:49,453 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1782, in <module>
+    generate_master_report(all_results)
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1629, in generate_master_report
+    valid_results = [r for r in experiment_results if r['rmsd'] < 90.0]
+                                                      ~^^^^^^^^
+KeyError: 'rmsd'
+
+2026-02-14 21:36:22,095 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:36:28,596 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:36:29,953 - MaxFlowv21 - INFO -    Step 0: Loss=302354.78, E_min=63.54, Temp=1.00
+2026-02-14 21:36:37,160 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 21:36:38,814 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:36:40,135 - MaxFlowv21 - INFO -    Step 0: Loss=418925.16, E_min=166.36, Temp=1.00
+2026-02-14 21:36:47,634 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 21:36:49,076 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:36:50,437 - MaxFlowv21 - INFO -    Step 0: Loss=369794.47, E_min=42.11, Temp=1.00
+2026-02-14 21:41:37,669 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:41:45,849 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:41:47,502 - MaxFlowv21 - INFO -    Step 0: Loss=302368.62, E_min=63.54, Temp=1.00
+2026-02-14 21:41:55,276 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 21:41:57,038 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:41:58,424 - MaxFlowv21 - INFO -    Step 0: Loss=418878.41, E_min=166.36, Temp=1.00
+2026-02-14 21:42:06,192 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 21:42:07,802 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:42:09,205 - MaxFlowv21 - INFO -    Step 0: Loss=369770.28, E_min=42.11, Temp=1.00
+2026-02-14 21:50:54,612 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:51:02,510 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:51:03,824 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 21:51:05,804 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1826, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1526, in run
+    'StepsTo09': steps_to_09 if steps_to_09 is not None else self.config.steps,
+                                ^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'steps_to_09' where it is not associated with a value
+
+2026-02-14 21:52:56,464 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:53:03,646 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:53:04,843 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 21:53:06,702 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1829, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1529, in run
+    'StepsTo09': steps_to_09 if steps_to_09 is not None else self.config.steps,
+                                ^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'steps_to_09' where it is not associated with a value
+
+2026-02-14 21:54:26,552 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:54:33,468 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:54:34,702 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 21:54:36,555 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1837, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1529, in run
+    'StepsTo09': steps_to_09 if steps_to_09 is not None else self.config.steps,
+                                ^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'steps_to_09' where it is not associated with a value
+
+2026-02-14 21:55:50,433 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:55:57,800 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:55:58,946 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 21:56:00,807 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1839, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1529, in run
+    'StepsTo09': steps_to_09 if steps_to_09 is not None else self.config.steps,
+                                ^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'steps_to_09' where it is not associated with a value
+
+2026-02-14 21:57:28,986 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:57:35,763 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:57:37,039 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 21:57:38,586 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1847, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1536, in run
+    'StepsTo09': steps_to_09 if steps_to_09 is not None else self.config.steps,
+                                ^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'steps_to_09' where it is not associated with a value
+
+2026-02-14 21:58:29,997 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:58:36,795 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:58:37,795 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 21:58:39,409 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1856, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1536, in run
+    'StepsTo09': steps_to_09 if steps_to_09 is not None else self.config.steps,
+                                ^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'steps_to_09' where it is not associated with a value
+
+2026-02-14 21:59:47,527 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 21:59:54,534 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 21:59:55,554 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 21:59:57,200 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1851, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1531, in run
+    'StepsTo09': steps_to_09 if steps_to_09 is not None else self.config.steps,
+                                ^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'steps_to_09' where it is not associated with a value
+
+2026-02-14 22:01:15,597 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 22:01:22,044 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:01:23,000 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 22:01:24,549 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1857, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1531, in run
+    'StepsTo09': steps_to_09 if steps_to_09 is not None else self.config.steps,
+                                ^^^^^^^^^^^
+UnboundLocalError: cannot access local variable 'steps_to_09' where it is not associated with a value
+
+2026-02-14 22:03:24,574 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 22:03:31,386 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:03:32,505 - MaxFlowv21 - INFO -    Step 0: Loss=303719.81, E_min=63.54, Temp=1.00
+2026-02-14 22:03:38,467 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 22:03:40,250 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:03:41,396 - MaxFlowv21 - INFO -    Step 0: Loss=420833.38, E_min=166.36, Temp=1.00
+2026-02-14 22:03:47,792 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 22:03:49,327 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:03:50,317 - MaxFlowv21 - INFO -    Step 0: Loss=371423.47, E_min=42.11, Temp=1.00
+2026-02-14 22:09:01,480 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 22:09:13,413 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:09:15,141 - MaxFlowv21 - INFO -    Step 0: Loss=1811.82, E_min=63.54, Temp=1.00
+2026-02-14 22:09:33,881 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 22:09:42,765 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:09:43,752 - MaxFlowv21 - INFO -    Step 0: Loss=63814.00, E_min=-21.56, Temp=1.00
+2026-02-14 22:09:49,912 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 22:09:51,566 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:09:52,755 - MaxFlowv21 - INFO -    Step 0: Loss=9351.25, E_min=33.05, Temp=1.00
+2026-02-14 22:11:02,093 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 22:11:09,263 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:11:10,289 - MaxFlowv21 - INFO -    Step 0: Loss=1811.82, E_min=63.54, Temp=1.00
+2026-02-14 22:11:16,870 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 22:11:19,221 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:11:20,184 - MaxFlowv21 - INFO -    Step 0: Loss=63814.00, E_min=-21.56, Temp=1.00
+2026-02-14 22:11:26,311 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 22:11:27,819 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:11:28,820 - MaxFlowv21 - INFO -    Step 0: Loss=9351.25, E_min=33.05, Temp=1.00
+2026-02-14 22:15:34,202 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 22:15:58,264 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:16:00,141 - MaxFlowv21 - INFO -    Step 0: Loss=1811.54, E_min=63.54, Temp=1.00
+2026-02-14 22:16:09,606 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 22:16:13,355 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:16:15,634 - MaxFlowv21 - INFO -    Step 0: Loss=63816.54, E_min=-21.56, Temp=1.00
+2026-02-14 22:16:36,591 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 22:16:39,930 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:16:41,647 - MaxFlowv21 - INFO -    Step 0: Loss=9355.50, E_min=33.05, Temp=1.00
+2026-02-14 22:18:07,230 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-14 22:18:24,510 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:18:25,633 - MaxFlowv21 - INFO -    Step 0: Loss=1811.54, E_min=63.54, Temp=1.00
+2026-02-14 22:18:32,085 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-14 22:18:34,096 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:18:35,068 - MaxFlowv21 - INFO -    Step 0: Loss=63816.54, E_min=-21.56, Temp=1.00
+2026-02-14 22:18:55,410 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-14 22:18:58,375 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-14 22:19:00,462 - MaxFlowv21 - INFO -    Step 0: Loss=9355.50, E_min=33.05, Temp=1.00
+2026-02-15 01:36:33,741 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-15 01:37:21,798 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 01:37:35,624 - MaxFlowv21 - INFO -    Step 0: Loss=240408663687168.00, E_min=56129996.00, Temp=1.00
+2026-02-15 01:38:28,970 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-15 01:38:41,525 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 01:38:52,360 - MaxFlowv21 - INFO -    Step 0: Loss=18227772484747264.00, E_min=41005028.00, Temp=1.00
+2026-02-15 01:40:06,043 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-15 01:40:16,634 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 01:40:28,721 - MaxFlowv21 - INFO -    Step 0: Loss=35531663144386560.00, E_min=1956143.38, Temp=1.00
+2026-02-15 01:54:25,334 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-15 01:54:44,094 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 01:54:48,427 - MaxFlowv21 - INFO -    Step 0: Loss=1660.99, E_min=10.06, Temp=1.00
+2026-02-15 01:54:49,561 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1889, in <module>
+    exp.run()
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1511, in run
+    self.step200_pos, self.step200_v,
+    ^^^^^^^^^^^^^^^^
+AttributeError: 'MaxFlowExperiment' object has no attribute 'step200_pos'. Did you mean: 'step0_pos'?
+
+2026-02-15 01:56:33,414 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-15 01:57:02,093 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 01:57:20,763 - MaxFlowv21 - INFO -    Step 0: Loss=1660.99, E_min=10.06, Temp=1.00
+2026-02-15 01:58:00,026 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-15 01:58:03,289 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 01:58:09,066 - MaxFlowv21 - INFO -    Step 0: Loss=387499.25, E_min=-191.14, Temp=1.00
+2026-02-15 01:59:04,238 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-15 01:59:17,384 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 01:59:25,148 - MaxFlowv21 - INFO -    Step 0: Loss=237676.98, E_min=-41.57, Temp=1.00
+2026-02-15 02:11:16,121 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-15 02:11:33,524 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 02:11:38,161 - MaxFlowv21 - ERROR - Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1927, in <module>
+    hist = exp.run()
+           ^^^^^^^^^
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1547, in run
+    loss = batch_energy.mean() + 10.0 * flow_loss + self.config.kl_beta * kl_loss
+                                                                          ^^^^^^^
+NameError: name 'kl_loss' is not defined. Did you mean: 'flow_loss'?
+
+2026-02-15 02:13:35,972 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: Helix-Flow
+2026-02-15 02:14:06,830 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 02:14:13,264 - MaxFlowv21 - INFO -    Step 0: Loss=1657.43, E_min=10.06, Temp=1.00
+2026-02-15 02:14:34,950 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: No-Phys
+2026-02-15 02:14:39,570 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 02:14:50,393 - MaxFlowv21 - INFO -    Step 0: Loss=387444.38, E_min=-191.14, Temp=1.00
+2026-02-15 02:15:22,735 - MaxFlowv21 - INFO -    >>> Running 7SMV with configuration: AdamW
+2026-02-15 02:15:31,309 - MaxFlowv21 - INFO -    Running 5 steps of Optimization...
+2026-02-15 02:15:39,081 - MaxFlowv21 - INFO -    Step 0: Loss=237646.11, E_min=-41.57, Temp=1.00

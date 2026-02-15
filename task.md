@@ -123,6 +123,10 @@
 - [x] **Versioning**: Remove hardcoded "Helix-Flow v35.9" from entry point. [x]
 - [x] **Branding**: Sync zip name and headers to v48.5. [x]
 
-## 32. ICLR 2026 "Main Track" Submission [ ]
+## 32. Logger & Import Hotfix (v48.6) [x]
+- [x] **Initialization Fix**: Move `logger` setup before resilient imports (SECTION 0.5). [x]
+- [x] **Versioning**: Update VERSION to v48.6 (Kaggle-Optimized). [x]
+
+## 33. ICLR 2026 "Main Track" Submission [ ]
 - [x] **Stress Test**: Verified v48.2 on mutational FIP targets on Kaggle T4. [x]
 - [ ] **Golden Submission**: Project Complete. Final manifesto packaged.

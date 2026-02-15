@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "d:\Drug\kaggle_submission\lite_experiment_suite.py", line 1760, in <module>
+    print(f"\U0001f31f Launching Helix-Flow v35.2 (IWA) ICLR Scientific Hardening Suite...")
+UnicodeEncodeError: 'cp950' codec can't encode character '\U0001f31f' in position 0: illegal multibyte sequence
