@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v55.3 MaxFlow (ICLR 2026 Cybernetic Refinement Edition)"
+VERSION = "v55.4 MaxFlow (ICLR 2026 Golden Fix Edition)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -278,8 +278,8 @@ class PhysicsEngine:
         
         # PI Controller State
         self.integral_error = 0.0 # Clash Debt
-        self.kp = 5.0             # [v55.3] Increased Proportional Gain for aggressive braking
-        self.ki = 0.1             # Integral Gain
+        self.kp = 0.5             # [v55.4] Lowered Gain for early pocket entrance
+        self.ki = 0.05            # [v55.4] Lowered Gain for stability
 
     def reset_state(self):
         """Reset PI controller state for new trajectory."""
@@ -1554,9 +1554,9 @@ class MaxFlowExperiment:
         q_L = nn.Parameter(torch.randn(B, N, device=device))    
         
         # Ligand Positions (Gaussian Cloud around Pocket)
-        # [v48.0] Correct initialization as (B, N, 3) to prevent view errors
-        noise = torch.randn(B, N, 3, device=device) * 10.0
-        pos_L = (p_center.view(1, 1, 3).repeat(B, N, 1) + noise).detach()
+        # [v55.4] Precision Funnel Initialization (5.0A noise + contraction)
+        noise = torch.randn(B, N, 3, device=device) * 5.0
+        pos_L = (p_center.view(1, 1, 3) + noise).detach()
         pos_L.requires_grad = True
         q_L.requires_grad = True
         
@@ -1617,9 +1617,9 @@ class MaxFlowExperiment:
         # We no longer flatten to B*N in the optimizer to avoid view mismatch
         data = FlowData(x_L=x_L, batch=torch.arange(B, device=device).repeat_interleave(N))
         
-        # [v48.0 Resource Hardening] Checkpoint Recovery
+        # [v55.4] PDB-specific Checkpoint Recovery (Prevents dimension leakage)
         start_step = 0
-        ckpt_path = "maxflow_ckpt.pt"
+        ckpt_path = f"maxflow_ckpt_{self.config.pdb_id}.pt"
         if os.path.exists(ckpt_path):
              logger.info(f"💾 [Segmented Training] Checkpoint found. Resuming from {ckpt_path}...")
              ckpt = torch.load(ckpt_path, map_location=device)
@@ -1781,11 +1781,13 @@ class MaxFlowExperiment:
                 e_bond = self.phys.calculate_internal_geometry_score(pos_L_reshaped)
                 e_hydro = self.phys.calculate_hydrophobic_score(pos_L_reshaped, x_L_for_physics, pos_P_batched, x_P_batched)
                 
-                # [v55.3] Physical Warm-up Weight: 
-                # Gradually introduce protein-ligand interactions after ligand unfolding
-                warm_up = min(1.0, (step / 50.0)) if step < 50 else 1.0
-                
-                batch_energy = (e_inter_sum + e_bond - 0.5 * e_hydro) * warm_up + e_intra + e_confine
+                # [v55.4] Physics Warm-up Phase: Structural focus for first 100 steps
+                if step < 100:
+                    batch_energy = e_intra + e_confine + e_bond 
+                else:
+                    # Gradually introduce protein-ligand interactions (e_inter)
+                    warm_up = min(1.0, ((step - 100) / 50.0)) if step < 150 else 1.0
+                    batch_energy = (e_inter_sum + e_bond - 0.5 * e_hydro) * warm_up + e_intra + e_confine
                 
                 # [v34.1] GRPO-MaxRL: Advantage-Weighted Flow Matching
                 # 1. Target Force from Physics
@@ -1927,10 +1929,9 @@ class MaxFlowExperiment:
                 if step % 50 == 0:
                     logger.info(f"   Step {step:03d} | E: {batch_energy.mean().item():.2f} | KL: {kl_loss.item():.4f} | tau: {maxrl_tau:.3f}")
                 
-                # [v48.0 Resource Hardening] Periodic Auto-Checkpoint (Segmented Training)
-                # This ensures we can resume from the 9-hour limit.
+                # [v55.4] Periodic Auto-Checkpoint (PDB-Specific)
                 if step > 0 and step % 100 == 0:
-                    ckpt_path = "maxflow_ckpt.pt"
+                    ckpt_path = f"maxflow_ckpt_{self.config.pdb_id}.pt"
                     logger.info(f"💾 [Segmented Training] Saving intermediate checkpoint at step {step}...")
                     torch.save({
                         'step': step,
@@ -2326,7 +2327,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=f"MaxFlow {VERSION} ICLR Suite")
     parser.add_argument("--target", type=str, default="1UYD", help="Target PDB ID (e.g., 1UYD, 7SMV, 3PBL, 5R8T)")
-    parser.add_argument("--steps", type=int, default=100)
+    parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--benchmark", action="store_true", help="Run comprehensive multi-target ICLR benchmark")
     parser.add_argument("--mutation_rate", type=float, default=0.0, help="Mutation rate for resilience benchmarking")
@@ -2342,7 +2343,7 @@ if __name__ == "__main__":
         print("\n🏆 [v55.2] Starting Zenith Multivalent Benchmark (Human vs Veterinary)...")
         # 3 Human Targets vs 3 Veterinary Targets (FIP/Canine/CDV)
         targets_to_run = ["1UYD", "3PBL", "7SMV", "4Z94", "7KX5", "6XU4"]
-        args.steps = 500 
+        args.steps = 1000 
         args.batch = 16
         configs = [{"name": "Helix-Flow", "use_muon": True, "no_physics": False}]
     elif args.ablation:

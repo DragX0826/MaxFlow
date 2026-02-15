@@ -211,3 +211,10 @@
 - [x] **PI Tuning**: Increase Kp to 5.0 and soften override scaling. [x]
 - [x] **Re-noising**: Implement Step 300 survivor logic (top 25%) and re-noising. [x]
 - [x] **Versioning**: Update VERSION to v55.3. [x]
+
+## 49. The Golden Fix (v55.4) [x]
+- [x] **Checkpoint Guard**: Implement PDB-specific checkpoint naming. [x]
+- [x] **Precision Funnel**: Implement 5.0A initialization with contraction. [x]
+- [x] **PI Re-tuning**: Lower Kp=0.5 and Ki=0.05 for early entrance. [x]
+- [x] **Structural Warm-up**: Implement 100-step structural-only phase. [x]
+- [x] **Versioning**: Update VERSION to v55.4. [x]
