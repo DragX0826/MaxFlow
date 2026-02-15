@@ -132,6 +132,15 @@
 - [x] **Broadcasting Fix**: Ensure time-embeddings match flattened atom clusters. [x]
 - [x] **Versioning**: Update VERSION to v48.7 (Kaggle-Optimized). [x]
 
-## 34. ICLR 2026 "Main Track" Submission [ ]
+## 34. PLaTITO Verbosity (v48.8) [x]
+- [x] **Startup UX**: Explicit logging for ESM-2 initialization added. [x]
+- [x] **Versioning**: Update VERSION to v48.8. [x]
+
+## 35. Autograd & Visualization Surgery (v48.9) [x]
+- [x] **Autograd Fix**: Detach `s_prev_ema` when updating and when calculating rewards. [x]
+- [x] **Visualizer Fix**: Flatten `pos_L` and `v_pred` for PCA in `plot_vector_field_2d`. [x]
+- [x] **Versioning**: Update VERSION to v48.9. [x]
+
+## 36. ICLR 2026 "Main Track" Submission [ ]
 - [x] **Stress Test**: Verified v48.2 on mutational FIP targets on Kaggle T4. [x]
 - [ ] **Golden Submission**: Project Complete. Final manifesto packaged.

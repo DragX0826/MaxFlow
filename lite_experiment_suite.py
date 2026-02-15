@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v48.7 MaxFlow (Kaggle-Optimized Golden)"
+VERSION = "v48.9 MaxFlow (Kaggle-Optimized Golden)"
 
 # --- SECTION 0.5: LOGGING & GLOBAL SETUP ---
 logging.basicConfig(
@@ -610,6 +610,7 @@ class BioPerceptionEncoder(nn.Module):
         super().__init__()
         try:
             import esm
+            logger.info(f"🧬 [PLaTITO] Initializing ESM-2 Model ({esm_model_name})... (This may take 2-5 mins on first run for weights download)")
             self.model, self.alphabet = esm.pretrained.load_model_and_alphabet(esm_model_name)
             self.model.eval()
             for param in self.model.parameters():
@@ -1162,8 +1163,9 @@ class PublicationVisualizer:
         print(f"📊 Plotting Vector Field Reshaping for {filename}...")
         try:
              # Convert to numpy
-             pos_np = pos_L.detach().cpu().numpy()[:200] # Limit points
-             v_np = v_pred.detach().cpu().numpy()[:200]
+             # [v48.9] Robustly handle 3D Batched [B, N, 3] or 2D [N, 3] by flattening
+             pos_np = pos_L.detach().cpu().numpy().reshape(-1, 3)[:200] # Limit points
+             v_np = v_pred.detach().cpu().numpy().reshape(-1, 3)[:200]
              
              # Use PCA to find best projection plane from Ligand atoms
              from sklearn.decomposition import PCA
@@ -1586,8 +1588,8 @@ class MaxFlowExperiment:
                      belief_change = (s_current - s_prev_ema).pow(2).mean(dim=-1)
                      intrinsic_reward = belief_change.view(B, N).mean(dim=1)
                 
-                # EMA Update
-                s_prev_ema = 0.9 * (s_prev_ema if s_prev_ema is not None else s_current) + 0.1 * s_current
+                # EMA Update - [v48.9] Explicitly DETACH to prevent cross-batch graph growth
+                s_prev_ema = 0.9 * (s_prev_ema if s_prev_ema is not None else s_current.detach()) + 0.1 * s_current.detach()
                 
                 # [v35.7] Evolution Trilogy: Save mid-point vector field
                 if step == 200:
@@ -2232,14 +2234,14 @@ if __name__ == "__main__":
         
         # [AUTOMATION] Package everything for submission
         import zipfile
-        zip_name = f"MaxFlow_v48.7_Kaggle_Golden.zip"
+        zip_name = f"MaxFlow_v48.9_Kaggle_Golden.zip"
         with zipfile.ZipFile(zip_name, "w") as z:
             files_to_zip = [f for f in os.listdir(".") if f.endswith((".pdf", ".pdb", ".tex"))]
             for f in files_to_zip:
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 MaxFlow v48.7 (Kaggle-Optimized Golden Submission) Completed.")
+        print(f"\n🏆 MaxFlow v48.9 (Kaggle-Optimized Golden Submission) Completed.")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:
