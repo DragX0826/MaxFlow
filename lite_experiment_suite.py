@@ -24,7 +24,19 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v48.5 MaxFlow (Kaggle-Optimized Golden)"
+VERSION = "v48.6 MaxFlow (Kaggle-Optimized Golden)"
+
+# --- SECTION 0.5: LOGGING & GLOBAL SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("maxflow_experiment.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("MaxFlowv21")
+
 # [SCALING] ICLR Production Mode logic (controlled via CLI now)
 # Default seed for reproducibility
 torch.manual_seed(2025)
@@ -161,16 +173,7 @@ def plot_flow_vectors(pos_L, v_pred, p_center, output_pdf="figB_flow_field.pdf")
         plt.savefig(output_pdf); plt.close()
     except: pass
 
-# --- SECTION 2: LOGGING & UTILS ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("maxflow_experiment.log"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger("MaxFlowv21")
+# --- SECTION 2: UTILS ---
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 warnings.filterwarnings('ignore')
@@ -2218,14 +2221,14 @@ if __name__ == "__main__":
         
         # [AUTOMATION] Package everything for submission
         import zipfile
-        zip_name = f"MaxFlow_v48.5_Kaggle_Golden.zip"
+        zip_name = f"MaxFlow_v48.6_Kaggle_Golden.zip"
         with zipfile.ZipFile(zip_name, "w") as z:
             files_to_zip = [f for f in os.listdir(".") if f.endswith((".pdf", ".pdb", ".tex"))]
             for f in files_to_zip:
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 MaxFlow v48.5 (Kaggle-Optimized Golden Submission) Completed.")
+        print(f"\n🏆 MaxFlow v48.6 (Kaggle-Optimized Golden Submission) Completed.")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:
