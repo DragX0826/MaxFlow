@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v58.5 MaxFlow (ICLR 2026 Golden Calculus Refined - Re-noising Fix)"
+VERSION = "v58.6 MaxFlow (ICLR 2026 Golden Calculus Refined - NaN Resilience)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1856,15 +1856,16 @@ class MaxFlowExperiment:
                 total_energy = e_soft + 100.0 * e_hard + 100.0 * e_bond
                 # [v58.2] Set create_graph=False as v_target is detached. 
                 force_total = -torch.autograd.grad(total_energy.sum(), pos_L, create_graph=False, retain_graph=True)[0]
-                v_target = force_total.detach()
+                # [v58.6 Fix] Hard-clip v_target to prevent gradient explosion from 100x bond rigidity
+                v_target = torch.clamp(force_total.detach(), -10.0, 10.0)
                 
                 # Update Annealing based on Force Magnitude
                 f_mag = v_target.norm(dim=-1).mean().item()
                 self.phys.update_alpha(f_mag)
                 
                 # The Golden Triangle Loss
-                # Pillar 1: Physics-Flow Matching
-                loss_fm = (v_pred - v_target).pow(2).mean()
+                # Pillar 1: Physics-Flow Matching (v58.6: Huber Loss for outlier robustness)
+                loss_fm = F.huber_loss(v_pred, v_target, delta=1.0)
                 
                 # Pillar 2: Geometric Smoothing (RJF)
                 jacob_reg = torch.zeros(1, device=device)
@@ -1955,6 +1956,11 @@ class MaxFlowExperiment:
                      loss = torch.tensor(0.0, device=device).requires_grad_(True)
             
             if self.config.mode != "inference":
+                # [v58.6 NaN Sentry] Early exit to prevent log corruption
+                if torch.isnan(loss):
+                    logger.error(f"   🚨 NaN detected at Step {step}! Breaking trajectory to preserve stability.")
+                    break
+                    
                 # [AMP] Scaled Backward with Gradient Accumulation
                 scaler.scale(loss / accum_steps).backward()
                 
