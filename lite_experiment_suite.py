@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v50.0 MaxFlow (ICLR 2026 Oral Edition)"
+VERSION = "v50.1 MaxFlow (ICLR 2026 Oral Edition - Stability Fix)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -39,6 +39,7 @@ def get_esm_model(model_name="esm2_t33_650M_UR50D"):
             import esm
             logger.info(f"🧬 [PLaTITO] Zenith: Loading ESM-2 Model ({model_name})... (May take 2-5 mins)")
             model, alphabet = esm.pretrained.load_model_and_alphabet(model_name)
+            model = model.to(device) # [v50.1 Fix] Ensure model is on the GPU for dynamic computation
             model.eval()
             for p in model.parameters(): p.requires_grad = False
             _ESM_MODEL_CACHE[model_name] = (model, alphabet)
@@ -1564,6 +1565,8 @@ class MaxFlowExperiment:
         # [v50.0 Oral Upgrade] Physics-Informed Drifting (PI-Drift)
         # Tracking the "Physics Residual" (Force - Model Prediction)
         drifting_field = torch.zeros(B, N, 3, device=device)
+        s_prev_ema = None        # [v50.1 Fix] Restore for belief tracking
+        v_pred_prev = None       # [v50.1 Fix] Restore for Euler history
         
         # 3. Main Optimization Loop
         logger.info(f"   Running {self.config.steps} steps of Optimization...")
@@ -2298,14 +2301,14 @@ if __name__ == "__main__":
         
         # [AUTOMATION] Package everything for submission
         import zipfile
-        zip_name = f"MaxFlow_v50.0_ICLR_Oral.zip"
+        zip_name = f"MaxFlow_v50.1_ICLR_Oral.zip"
         with zipfile.ZipFile(zip_name, "w") as z:
             files_to_zip = [f for f in os.listdir(".") if f.endswith((".pdf", ".pdb", ".tex"))]
             for f in files_to_zip:
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 MaxFlow v50.0 (ICLR 2026 Oral Edition) Completed.")
+        print(f"\n🏆 MaxFlow v50.1 (ICLR 2026 Oral Edition) Completed.")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:
