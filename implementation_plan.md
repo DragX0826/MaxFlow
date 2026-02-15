@@ -74,5 +74,6 @@ This blueprint documents the finalized state of the **MaxFlow** Bio-Geometric Ag
 | Resources & Stability | [x] ACTIVE | v48.0 |
 | Stability Hotfixes | [x] ACTIVE | v48.1 |
 | Visual Polish / Robustness | [x] ACTIVE | v48.2 |
+| Import & Runtime Hotfix | [x] ACTIVE | v48.5 |
 
 Codebase validated and ready for ICLR 2026 submission.

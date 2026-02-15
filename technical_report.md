@@ -1,7 +1,7 @@
 # MaxFlow: Bio-Geometric Agentic Flow for Accelerated Drug Discovery
 
-**Version**: MaxFlow ICLR 2026 Golden Submission (v48.2)  
-**Strategic Focus**: Kaggle-Optimized Visual Polish & Robustness  
+**Version**: MaxFlow ICLR 2026 Golden Submission (v48.5)  
+**Strategic Focus**: Deployment Resilience & Oral Grade Polish  
 
 ---
 
@@ -78,7 +78,7 @@ To address the real-world constraints of hardware (e.g., Kaggle T4's 9-hour limi
 | **Optimization** | Disentangled | *Muon Matrices / AdamW Geometry* |
 
 ## 12. Submission Impact
-| Metric | Stitched Models | **MaxFlow Agent (v48.2)** | ICLR 2026 Expectation |
+| Metric | Stitched Models | **MaxFlow Agent (v48.5)** | ICLR 2026 Expectation |
 | --- | --- | --- | --- |
 | **Logic** | Implicit | **Evolution-Guided** | High Bio-Insight |
 | **Path** | Static Flow | **Energy-Conditioned** | SOTA Flow Dynamics |

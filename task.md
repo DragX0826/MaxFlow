@@ -110,6 +110,19 @@
 - [x] **FB Loss Refactor**: Clarify `loss_fb` calculation with explicit `rewards_per_atom`. [x]
 - [x] **Versioning**: Update all strings to v48.2 (Kaggle-Optimized). [x]
 
-## 29. ICLR 2026 "Main Track" Submission [x]
+## 29. Syntax Hotfix (v48.3) [x]
+- [x] **Featurizer Fix**: Restore missing `except` block in `RealPDBFeaturizer.parse`. [x]
+- [x] **Versioning**: Update VERSION to v48.3 (Kaggle-Optimized). [x]
+
+## 30. Indentation Hotfix (v48.4) [x]
+- [x] **Alignment Fix**: Standardize indentation in optimizer setup (line 1437). [x]
+- [x] **Versioning**: Update VERSION to v48.4 (Kaggle-Optimized). [x]
+
+## 31. Import & Runtime Hotfix (v48.5) [x]
+- [x] **Import Fix**: Robustify `PDBParser` and `Chem` imports with localized try-except. [x]
+- [x] **Versioning**: Remove hardcoded "Helix-Flow v35.9" from entry point. [x]
+- [x] **Branding**: Sync zip name and headers to v48.5. [x]
+
+## 32. ICLR 2026 "Main Track" Submission [ ]
 - [x] **Stress Test**: Verified v48.2 on mutational FIP targets on Kaggle T4. [x]
-- [x] **Golden Submission**: Project Complete. Final manifesto packaged. [x]
+- [ ] **Golden Submission**: Project Complete. Final manifesto packaged.
