@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v58.2 MaxFlow (ICLR 2026 Golden Calculus Refined - T4 Fix)"
+VERSION = "v58.3 MaxFlow (ICLR 2026 Golden Calculus Refined - Dims Hardened)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -339,10 +339,12 @@ class PhysicsEngine:
         inv_sc_dist = sigma_ij.pow(2) / (dist_sq + self.current_alpha * sigma_ij.pow(2) + 1e-6)
         e_vdw = 0.15 * (inv_sc_dist.pow(6) - inv_sc_dist.pow(3))
         
-        e_soft = (e_elec + e_vdw).sum()
+        # [v58.3] Batch-aware summation (B, N, M) -> (B,)
+        e_soft = (e_elec + e_vdw).sum(dim=(1, 2))
         
         # 4. Hard Energy (Severe Clashes)
-        e_clash = torch.relu(sigma_ij - dist).pow(2).sum()
+        # [v58.3] Batch-aware summation (B, N, M) -> (B,)
+        e_clash = torch.relu(sigma_ij - dist).pow(2).sum(dim=(1, 2))
         
         return e_soft, e_clash, self.current_alpha
 
@@ -362,7 +364,8 @@ class PhysicsEngine:
         type_probs = x_L[..., :9] # C, N, O, S, F, P, Cl, Br, I
         target_valency = type_probs @ self.params.standard_valencies # (B, N)
         
-        valency_mse = (neighbors - target_valency).pow(2).mean()
+        # [v58.3] Batch-aware mean (B, N) -> (B,)
+        valency_mse = (neighbors - target_valency).pow(2).mean(dim=1)
         return valency_mse
 
 
@@ -376,12 +379,11 @@ class PhysicsEngine:
         dist = torch.cdist(pos_L, pos_L) + torch.eye(N, device=device).unsqueeze(0) * 10
         # Find close atoms (1.1A < r < 2.0A) as potential bonds
         mask = (dist > 1.1) & (dist < 2.0)
-        if not mask.any():
-            return torch.tensor(0.0, device=device)
         
-        # Harmonic Penalty: E = 0.5 * k * (r - r0)^2
-        bond_diff = dist[mask] - self.params.bond_length_mean
-        e_bond = 0.5 * self.params.bond_k * bond_diff.pow(2).mean()
+        # [v58.3] Batch-aware Harmonic Penalty: E = 0.5 * k * (r - r0)^2
+        # Use simple reduction that handles sparse masks per sample
+        bond_diff = (dist - self.params.bond_length_mean).pow(2)
+        e_bond = 0.5 * self.params.bond_k * (bond_diff * mask).sum(dim=(1, 2)) / (mask.sum(dim=(1, 2)) + 1e-6)
         return e_bond
 
     def compute_internal_energy(self, pos_L, bond_idx, angle_idx, softness=0.0):
@@ -2019,7 +2021,8 @@ class MaxFlowExperiment:
         else:
              best_rmsd = 99.99 # Flag for DeNovo
              
-        final_E = batch_energy[best_idx].item()
+        # [v58.3 Safety] Ensure indexing works even if batch_energy is unexpectedly reduced
+        final_E = batch_energy.view(-1)[best_idx].item()
         
         # [POLISH] Add Sample Efficiency to results
         # [SCIENTIFIC INTEGRITY] Rename Energy to Binding Pot.
@@ -2265,8 +2268,9 @@ def run_scaling_benchmark():
         
         for n in atom_counts:
             torch.cuda.empty_cache()
-            # Mock Data
-            x = torch.zeros(n, 9, device=device); x[..., 0] = 1.0
+            # Mock Data - [v58.3] Align dim with backbone requirements
+            D_feat = 167 
+            x = torch.zeros(n, D_feat, device=device); x[..., 0] = 1.0
             pos = torch.randn(n, 3, device=device)
             batch = torch.zeros(n, dtype=torch.long, device=device)
             data = FlowData(x_L=x, batch=batch)
