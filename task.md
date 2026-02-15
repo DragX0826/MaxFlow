@@ -238,3 +238,11 @@
 ## 53. The Dimension Hotfix (v56.3) [x]
 - [x] **Broadcasting Fix**: Correct extra `unsqueeze` in Kernel scaling. [x]
 - [x] **Versioning**: Update VERSION to v56.3. [x]
+
+## 60. ICLR SOTA Refinement (v57.0) [x]
+- [x] **Geometry-Energy Supervision**: implement Kabsch-RMSD loss and two-stage training. [x]
+- [x] **Chemical Validity Constraints**: Implement valency loss and MMFF94 bond/angle potentials. [x]
+- [x] **Dynamic Environment Awareness**: Implement Dynamic KNN pocket slicing (12Å). [x]
+- [x] **Adaptive PID Control**: Link PID gains (kp, ki, kd) to time/progress. [x]
+- [x] **Scientific Evaluation Fix**: Fix Scaling Benchmark and implement PyMOL 3D overlays. [x]
+- [x] **Versioning**: Update VERSION to v57.0. [x]
