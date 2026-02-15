@@ -198,5 +198,10 @@
 - [x] **Stability Patch**: Fix ForceField/Physics parameter synchronization. [x]
 - [x] **Versioning**: Update VERSION to v55.1. [x]
 
-## 46. ICLR 2026 Golden Submission [x]
+## 46. Dtype Mismatch Hotfix (v55.2) [x]
+- [x] **Dtype Sync**: Cast ESM features back to `.float()` in BioPerception. [x]
+- [x] **Dynamic Casting**: Ensure compute_esm_dynamic returns float tensors. [x]
+- [x] **Versioning**: Update VERSION to v55.2. [x]
+
+## 47. ICLR 2026 Golden Submission [x]
 - [x] **Final Payload**: Deliver the absolute terminal ZIP and Technical Report. [x]

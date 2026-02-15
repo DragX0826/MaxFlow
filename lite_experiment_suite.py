@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v55.1 MaxFlow (ICLR 2026 PI-CAH Hotfix)"
+VERSION = "v55.2 MaxFlow (ICLR 2026 Zenith Precision Edition)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -536,8 +536,8 @@ class RealPDBFeaturizer:
                 results = model(batch_tokens, repr_layers=[33], return_contacts=False)
                 token_representations = results["representations"][33]
             
-            # Remove start/end tokens
-            return token_representations[0, 1 : len(sequence) + 1].cpu()
+            # [v55.2] Remove start/end tokens & Ensure Float Precision for Backbone compatibility
+            return token_representations[0, 1 : len(sequence) + 1].float().cpu()
         except Exception as e:
             logger.error(f"❌ [PLaTITO] Dynamic Computation Failed: {e}")
             return None
@@ -732,6 +732,9 @@ class BioPerceptionEncoder(nn.Module):
         # [Surgery 1] Robust padding/projection
         if x_P.size(-1) != self.esm_dim:
             x_P = F.pad(x_P, (0, self.esm_dim - x_P.size(-1)))
+        
+        # [v55.2 Hotfix] Cast x_P (from ESM-FP16) back to float() for linear layer compatibility
+        x_P = x_P.float()
         
         h = self.adapter(x_P)
         return h
@@ -2309,8 +2312,9 @@ if __name__ == "__main__":
     all_histories = {} 
     
     if args.benchmark:
-        print("\n🏆 [v52.1] Launching Deep ICLR Benchmark Suite (1UYD, 3PBL, 7SMV)...")
-        targets_to_run = ["1UYD", "3PBL", "7SMV"]
+        print("\n🏆 [v55.2] Starting Zenith Multivalent Benchmark (Human vs Veterinary)...")
+        # 3 Human Targets vs 3 Veterinary Targets (FIP/Canine/CDV)
+        targets_to_run = ["1UYD", "3PBL", "7SMV", "4Z94", "7KX5", "6XU4"]
         args.steps = 500 
         args.batch = 16
         configs = [{"name": "Helix-Flow", "use_muon": True, "no_physics": False}]
@@ -2352,14 +2356,14 @@ if __name__ == "__main__":
         
         # [AUTOMATION] Package everything for submission
         import zipfile
-        zip_name = f"MaxFlow_v55.1_Zenith_Hotfix.zip"
+        zip_name = f"MaxFlow_v55.2_Zenith_Precision.zip"
         with zipfile.ZipFile(zip_name, "w") as z:
             files_to_zip = [f for f in os.listdir(".") if f.endswith((".pdf", ".pdb", ".tex"))]
             for f in files_to_zip:
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 MaxFlow v55.1 (ICLR 2026 PI-CAH Zenith Hotfix) Completed.")
+        print(f"\n🏆 MaxFlow v55.2 (ICLR 2026 Zenith Precision) Completed.")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:
