@@ -1722,12 +1722,15 @@ class MaxFlowExperiment:
         x_P_sub = x_P[:200]
         q_P_sub = q_P[:200]
         
-        # [v57.1] Scientific Polish: ESM-feature driven initialization for x_L
+        # [v57.1.1 Hotfix] Scientific Polish: ESM-feature driven initialization for x_L
         with torch.no_grad():
             x_P_batched = x_P.unsqueeze(0).repeat(B, 1, 1)
             # Use cross-attention or simple projection to warm-up x_L
             context_h = backbone.perception(x_P_batched).mean(dim=1, keepdim=True).repeat(1, N, 1)
-            x_L.data.add_(context_h * 0.1) # Add protein context to random noise
+            # [v57.1.1 Fix] Aligned 64-dim context with 167-dim x_L via zero-padding
+            context_projected = torch.zeros(B, N, D, device=device)
+            context_projected[..., :context_h.shape[-1]] = context_h
+            x_L.data.add_(context_projected * 0.1) # Add protein context to random noise
         
         # [v48.0] Standardized Batch Logic: (B, N, D)
         # We no longer flatten to B*N in the optimizer to avoid view mismatch

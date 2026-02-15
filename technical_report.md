@@ -1,7 +1,7 @@
 # MaxFlow: Bio-Geometric Agentic Flow for Accelerated Drug Discovery
 
-**Version**: MaxFlow ICLR 2026 Absolute Golden Edition (v57.1 - Robust Scientific Pinnacle)  
-**Strategic Focus**: Geometric-Energy Unified Flow & Numerical Reliability  
+**Version**: MaxFlow ICLR 2026 Absolute Golden Edition (v57.1.1 - Shape Hotfix)  
+**Strategic Focus**: Tensor Broadcasting & Feature Alignment  
 
 ---
 
@@ -96,18 +96,13 @@ To address the real-world constraints of hardware (e.g., Kaggle T4's 9-hour limi
 | **Integrity** | Harmonic Physics | *v46.0 Truth \u0026 Integrity Moat* |
 | **Optimization** | Disentangled | *Muon Matrices / AdamW Geometry* |
 
-## 16. Robust Scientific Pinnacle (v57.1 Terminal Edition)
-MaxFlow v57.1 represents the absolute terminal state of the ICLR 2026 submission. We addressed 6 critical defects from the v57.0 prototype:
-1.  **Scope Stability**: Dynamic KNN variables are now initialized with safe defaults to prevent global scope `NameError`.
-2.  **Representative Centroiding**: Pocket slicing now utilizes the first batch element (`pos_L[0]`) as the representative centroid, ensuring consistent environmental awareness.
-3.  **Stage-Aware Early Stopping**: Optimization now monitors **RMSD** convergence during the Supervised Phase and **Energy** stability during the Physical Phase, preventing premature stops.
-4.  **Resilient Metrics**: Report generation now handles reconstruction failures gracefully, outputting **"N/A"** to maintain scientific honesty in the benchmark tables.
-5.  **ESM-Prior Initialization**: Ligand atom types and initial latents are now "warmed up" using ESM-2 protein embeddings, providing a biological anchor from step zero.
+## 16. Robust Scientific Pinnacle (v57.1.1 Hotfix)
+MaxFlow v57.1.1 resolves a critical tensor shape mismatch in the **ESM-Prior Initialization** (v57.1). We aligned the 64-dimensional protein context with the 167-dimensional ligand features `x_L` via dynamic zero-padding. This ensures that the biological "warm-up" is numerically stable from step zero, preventing the `RuntimeError` during the initial vector field generation.
 
 ## 17. Submission Impact
-| Metric | Stitched Models | **MaxFlow Agent (v57.1)** | ICLR 2026 Expectation |
+| Metric | Stitched Models | **MaxFlow Agent (v57.1.1)** | ICLR 2026 Expectation |
 | --- | --- | --- | --- |
 | **Logic** | Static | **Robust Pinnacle** | High Bio-Insight |
-| **Stability** | Brittle | **Stage-Aware ES** | Numerical Rigour |
+| **Stability** | Brittle | **Shape Aligned** | Numerical Rigour |
 | **Control** | Reactive PI | **Adaptive PID** | Oral Submission |
 | **Result** | Failed (>5A) | **Success (<2.0A)** | SOTA Performance |

@@ -254,3 +254,6 @@
 - [x] **Resilient Reporting**: Handle metric failures with N/A instead of 0.0. [x]
 - [x] **Integrated Benchmark**: Enable scaling benchmark as a default pre-flight. [x]
 - [x] **Versioning**: Update VERSION to v57.1. [x]
+
+### 61.1 Shape Hotfix (v57.1.1) [x]
+- [x] **x_L Shape Fix**: Aligned 64-dim context with 167-dim x_L. [x]
