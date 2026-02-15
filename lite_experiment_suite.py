@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v58.1 MaxFlow (ICLR 2026 Golden Calculus Refined)"
+VERSION = "v58.2 MaxFlow (ICLR 2026 Golden Calculus Refined - T4 Fix)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1811,12 +1811,14 @@ class MaxFlowExperiment:
                         logger.info(f"   🌊 [Dynamic KNN] Sliced {len(near_indices)} atoms.")
 
                 # Flow Field Prediction
-                t_input = torch.full((B,), progress, device=device)
-                # Model expects flattended pos_L (B*N, 3)
-                pos_L_flat = pos_L.view(-1, 3)
-                out = model(data, t=t_input, pos_L=pos_L_flat, x_P=x_P_sub, pos_P=pos_P_sub)
-                v_pred = out['v_pred'].view(B, N, 3)
-                s_current = out['latent'] # [v58.1] Extracted correctly
+                # [v58.2 Hotfix] Disable CuDNN to allow double-backward through GRU backbone
+                with torch.backends.cudnn.flags(enabled=False):
+                    t_input = torch.full((B,), progress, device=device)
+                    # Model expects flattended pos_L (B*N, 3)
+                    pos_L_flat = pos_L.view(-1, 3)
+                    out = model(data, t=t_input, pos_L=pos_L_flat, x_P=x_P_sub, pos_P=pos_P_sub)
+                    v_pred = out['v_pred'].view(B, N, 3)
+                    s_current = out['latent'] 
                 
                 # EMA Update for tracking (Diagnostic Only)
                 s_prev_ema = 0.9 * (s_prev_ema if s_prev_ema is not None else s_current.detach()) + 0.1 * s_current.detach()
@@ -1850,7 +1852,8 @@ class MaxFlowExperiment:
                 # Unified Target Velocity Selection
                 # E_total = E_soft + 100*E_hard + 10*E_bond (Refined weights for v58.1)
                 total_energy = e_soft + 100.0 * e_hard + 10.0 * e_bond
-                force_total = -torch.autograd.grad(total_energy.sum(), pos_L, create_graph=True, retain_graph=True)[0]
+                # [v58.2] Set create_graph=False as v_target is detached. 
+                force_total = -torch.autograd.grad(total_energy.sum(), pos_L, create_graph=False, retain_graph=True)[0]
                 v_target = force_total.detach()
                 
                 # Update Annealing based on Force Magnitude
@@ -1864,10 +1867,12 @@ class MaxFlowExperiment:
                 # Pillar 2: Geometric Smoothing (RJF)
                 jacob_reg = torch.zeros(1, device=device)
                 if step % 2 == 0:
-                    eps = torch.randn_like(pos_L)
-                    v_dot_eps = (v_pred * eps).sum()
-                    v_jp = torch.autograd.grad(v_dot_eps, pos_L, create_graph=True, retain_graph=True)[0]
-                    jacob_reg = v_jp.pow(2).mean()
+                    # [v58.2 Hotfix] Enable double-backward for GRU
+                    with torch.backends.cudnn.flags(enabled=False):
+                        eps = torch.randn_like(pos_L)
+                        v_dot_eps = (v_pred * eps).sum()
+                        v_jp = torch.autograd.grad(v_dot_eps, pos_L, create_graph=True, retain_graph=True)[0]
+                        jacob_reg = v_jp.pow(2).mean()
                 
                 # Pillar 3: Semantic Anchoring [v58.1 Fix Shape]
                 s_mean = s_current.view(B, N, -1).mean(dim=1) # (B, H)
