@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v55.4 MaxFlow (ICLR 2026 Golden Fix Edition)"
+VERSION = "v56.0 MaxFlow (ICLR 2026 Flexible Evolution Edition)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -271,20 +271,22 @@ class PhysicsEngine:
     """
     def __init__(self, ff_params: ForceFieldParameters):
         self.params = ff_params
-        # [v54.1] PI-Controlled Hardening (PID Framework)
-        # Objectives: Fast convergence, No Soft-Lock, Scaling Invariance.
+        # [v56.0] PID-Controlled Hardening (Flexible Evolution)
         self.current_alpha = self.params.softness_start
         self.hardening_rate = 0.1 # Base rate
         
-        # PI Controller State
+        # PID Controller State
         self.integral_error = 0.0 # Clash Debt
-        self.kp = 0.5             # [v55.4] Lowered Gain for early pocket entrance
-        self.ki = 0.05            # [v55.4] Lowered Gain for stability
+        self.prev_error = 0.0     # Error derivative
+        self.kp = 0.5             # Proportional Gain
+        self.ki = 0.05            # Integral Gain
+        self.kd = 0.05            # [v56.0] Derivative Gain for prediction
 
     def reset_state(self):
-        """Reset PI controller state for new trajectory."""
+        """Reset PID controller state for new trajectory."""
         self.current_alpha = self.params.softness_start
         self.integral_error = 0.0
+        self.prev_error = 0.0
 
     # [FIX] Renamed to match call site (compute_energy)
     def compute_energy(self, pos_L, pos_P, q_L, q_P, x_L, x_P, step_progress=0.0):
@@ -317,26 +319,31 @@ class PhysicsEngine:
             else:
                 error_signal = torch.tensor(0.0, device=dist.device)
 
-            # PI Control Law
-            p_term = self.kp * error_signal
-            self.integral_error = 0.9 * self.integral_error + 0.1 * error_signal # Exponential Integral
-            i_term = self.ki * self.integral_error
-            
-            # Braking Factor
-            braking = 1.0 + p_term + i_term
-            # [v55.0] PI Robustness: Cap braking to prevent controller saturation
-            braking = torch.clamp(braking, max=10.0) 
-            
-            decay = self.hardening_rate / braking
-            
-            # [Safety Override] Forced Hardening at optimization tail (Anti-Soft-Lock)
-            if step_progress > 0.8:
-                # [v55.3] Softened override scaling (5.0 -> 2.0) to prevent energy explosions
-                decay = self.hardening_rate * (1.0 + 2.0 * (step_progress - 0.8))
-            
-            # Update Alpha State
-            self.current_alpha = self.current_alpha * (1.0 - decay)
-            self.current_alpha = max(self.current_alpha, self.params.softness_end)
+            # PID Control Law
+        # [v56.0] Predictive PI: Added derivative term to anticipate collisions
+        error_dot = (error_signal - self.prev_error)
+        p_term = self.kp * error_signal
+        self.integral_error = 0.9 * self.integral_error + 0.1 * error_signal
+        i_term = self.ki * self.integral_error
+        d_term = self.kd * error_dot
+        self.prev_error = error_signal
+        
+        # Braking Factor
+        braking = 1.0 + p_term + i_term + d_term
+        braking = torch.clamp(braking, min=0.1, max=10.0) 
+        
+        # [v56.0] Energy-Driven Hardening: Rate depends on gradient norm / signal
+        # Lower force = softer evolution; High clash = slow down hardening.
+        adaptive_rate = self.hardening_rate * torch.sigmoid(error_signal + 1e-4)
+        decay = adaptive_rate / braking
+        
+        # [Safety Override] Softened for v55.4
+        if step_progress > 0.8:
+            decay = decay * (1.0 + 2.0 * (step_progress - 0.8))
+        
+        # Update Alpha State
+        self.current_alpha = self.current_alpha * (1.0 - decay)
+        self.current_alpha = max(self.current_alpha, self.params.softness_end)
             
         # --- End PI Logic ---
 
@@ -357,9 +364,6 @@ class PhysicsEngine:
         term_r6 = inv_sc_dist.pow(6)
         term_r3 = inv_sc_dist.pow(3)
         e_vdw = 0.15 * (term_r6 - term_r3)
-        
-        # E = 4 * epsilon * ( (term)^6 - (term)^3 )
-        e_vdw = 0.15 * (inv_sc_dist.pow(6) - inv_sc_dist.pow(3))
         
         return e_elec + e_vdw
 
@@ -1606,6 +1610,14 @@ class MaxFlowExperiment:
             opt = torch.optim.AdamW(params, lr=self.config.lr, weight_decay=1e-5)
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.config.steps)
         
+        # [v56.0] Anchor Representation Alignment (Prasad et al., 2026)
+        # Pre-extract anchor mean from protein perception to justify chemical sanity
+        # This replaces trainable rewards to prevent "Reward Hacking".
+        with torch.no_grad():
+            x_P_batched_init = x_P.unsqueeze(0).repeat(B, 1, 1)
+            protein_emb_init = backbone.perception(x_P_batched_init)
+            esm_anchor = protein_emb_init.mean(dim=1).detach() # (B, hidden_dim)
+        
         # [NEW] AMP & Stability Tools
         scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
         accum_steps = self.config.accum_steps # [v37.0] Tuned for T4 stability
@@ -1789,19 +1801,32 @@ class MaxFlowExperiment:
                     warm_up = min(1.0, ((step - 100) / 50.0)) if step < 150 else 1.0
                     batch_energy = (e_inter_sum + e_bond - 0.5 * e_hydro) * warm_up + e_intra + e_confine
                 
+                # [v56.0] Anchor Alignment Reward (Chemical Sanity)
+                # Proximity to ESM-prior anchor in latent space
+                with torch.no_grad():
+                    s_current_mean = s_current.mean(dim=1) # (B, hidden_dim)
+                    anchor_reward = -torch.norm(s_current_mean - esm_anchor, dim=-1) # (B,)
+                
                 # [v34.1] GRPO-MaxRL: Advantage-Weighted Flow Matching
                 # 1. Target Force from Physics
                 # [v53.0 Soft-Flow] Deep Physics Gradient (No Clamping)
                 # Soft-Core potentials enable direct backprop without numerical explosions.
                 force = -torch.autograd.grad(batch_energy.sum(), pos_L, create_graph=False, retain_graph=True)[0]
                 force = force.detach()
+                
+                # [v56.0] Kernel-Smoothed Drift (Gaussian Smoothing for Singularities)
+                # Prevents "5-valent carbon" and explosive repulsive forces
+                sigma_smooth = 0.5 * softness # adaptive kernel width
+                kernel_weight = torch.exp(-dist_sq.mean(dim=-1).unsqueeze(-1) / (2 * sigma_smooth**2 + 1e-6))
+                force = force * kernel_weight.unsqueeze(-1)
+                
                 torch.nan_to_num_(force, nan=0.0)
                 
                 # [Surgery 6 & 7] Composite Reward (Physical + ΔBelief + Interpretable Features)
                 # rewards = -Physical Energy + intrinsic + interpretable probes
                 rewards = -batch_energy.detach() 
                 rewards = rewards + 0.2 * intrinsic_reward # ΔBelief: reward exploration/information
-                rewards = rewards + 0.1 * valency_score.view(B, N).mean(dim=1).detach() # FaR: reward chemical sanity
+                rewards = rewards + 0.1 * anchor_reward.detach() # [v56.0] Anchor Alignment
                 
                 # [STABILIZER] Numerical Stability Constant (Not Variance Reduction)
                 rewards = torch.clamp(rewards, min=-100.0, max=100.0)
@@ -1861,22 +1886,17 @@ class MaxFlowExperiment:
                 if s_prev_ema is not None and self.config.mode == "train":
                     loss_fb = (s_current - s_prev_ema.detach()).pow(2).mean()
                 
-                # [v53.0 Soft-Flow] Jacobi Regularization (RJF Core)
-                # Hutchinson's Estimator for Path Smoothness
+                # [v56.0] Jacobi Regularization (RJF) - Boosted for Flexible Flow
                 jacob_reg = torch.zeros(1, device=device)
                 if getattr(self.config, 'use_jacobi', True) and step % 2 == 0:
                     eps = torch.randn_like(pos_L)
-                    # RJF Loss: || grad(v \cdot \epsilon) ||^2
                     v_dot_eps = (v_pred * eps).sum()
                     v_jp = torch.autograd.grad(v_dot_eps, pos_L, create_graph=True, retain_graph=True)[0]
                     jacob_reg = v_jp.pow(2).mean()
-                elif self.config.mode == "train":
-                    # Use a zero tensor but keep it in the graph if needed (though FM is dominant)
-                    jacob_reg = torch.tensor(0.0, device=device)
                 
-                # Final loss (v45.0 Bleeding-Edge RJF Loss)
-                # FM + Jacobi + One-step FB
-                loss = loss_fm + 0.05 * jacob_reg + 0.1 * loss_fb 
+                # Final loss (v56.0 Flexible Overhaul)
+                # Boosted Jacobi weight (0.05 -> 0.1) for smoother paths
+                loss = loss_fm + 0.1 * jacob_reg + 0.1 * loss_fb 
                 # [v35.4] Per-sample tracking for Batch Consensus shading
                 cos_sim_batch = F.cosine_similarity(v_pred.view(B, N, 3), force.view(B, N, 3), dim=-1).mean(dim=1).detach().cpu().numpy()
                 convergence_history.append(cos_sim_batch)

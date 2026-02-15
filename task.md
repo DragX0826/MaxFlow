@@ -218,3 +218,11 @@
 - [x] **PI Re-tuning**: Lower Kp=0.5 and Ki=0.05 for early entrance. [x]
 - [x] **Structural Warm-up**: Implement 100-step structural-only phase. [x]
 - [x] **Versioning**: Update VERSION to v55.4. [x]
+
+## 50. Flexible Evolution (v56.0) [x]
+- [x] **Jacobi Regularization (RJF)**: Implement Hutchinson Estimator for smooth flow. [x]
+- [x] **Predictive PI**: Add energy trend ($de/dt$) to PI controller. [x]
+- [x] **Anchor Alignment**: Implement fixed ESM-latent anchor reward. [x]
+- [x] **Energy-Driven Hardening**: Scheduled alpha based on gradient norm. [x]
+- [x] **Kernel-Smoothed Drift**: Gaussian smoothing for singular force zones. [x]
+- [x] **Versioning**: Update VERSION to v56.0. [x]
