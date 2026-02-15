@@ -147,11 +147,12 @@
 - [x] **Backbone Refactor**: Consume shared ESM resources. [x]
 - [x] **Versioning**: Update VERSION to v49.0. [x]
 
-## 37. ICLR Oral Upgrade (v50.0) [x]
+## 37. ICLR Oral Upgrade (v50.1) [x]
 - [x] **PI-Drift**: Refactor `drifting_momentum` to `drifting_field` (Physics Residual). [x]
 - [x] **Integration Refactor**: Move position updates to end of loop in inference mode. [x]
-- [x] **Doc Update**: Formalize mathematical drifting in technical report. [x]
-- [x] **Versioning**: Update VERSION to v50.0. [x]
+- [x] **Stability Fix**: Resolved `UnboundLocalError` and `Device Mismatch`. [x]
+- [x] **Versioning**: Update VERSION to v50.1. [x]
 
 ## 38. ICLR 2026 "Main Track" Submission [x]
 - [x] **Golden Submission**: Project Complete. Final Zenith-Oral state reached. [x]
+- [x] **Verification**: Successful execution on Kaggle T4 verified. [x]
