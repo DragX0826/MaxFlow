@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v48.4 MaxFlow (Kaggle-Optimized Golden)"
+VERSION = "v48.5 MaxFlow (Kaggle-Optimized Golden)"
 # [SCALING] ICLR Production Mode logic (controlled via CLI now)
 # Default seed for reproducibility
 torch.manual_seed(2025)
@@ -83,9 +83,13 @@ def auto_install_deps():
 try:
     from rdkit import Chem
     from rdkit.Chem import Descriptors, QED, AllChem, rdMolAlign
+except ImportError:
+    logger.warning("⚠️ RDKit not found. Chemical metrics will be disabled.")
+
+try:
     from Bio.PDB import PDBParser, Polypeptide
 except ImportError:
-    pass
+    logger.warning("⚠️ BioPython not found. PDB Parsing will be disabled.")
 
 # --- SECTION 1.1: EMBEDDED SCIENTIFIC VISUALIZER (Standalone) ---
 def export_pose_overlay(target_pdb, prediction_pdb, output_pdb):
@@ -425,7 +429,12 @@ class RealPDBFeaturizer:
     Robust to missing residues, alternat locations, and insertions.
     """
     def __init__(self, esm_path="esm_embeddings.pt"):
-        self.parser = PDBParser(QUIET=True)
+        try:
+            from Bio.PDB import PDBParser
+            self.parser = PDBParser(QUIET=True)
+        except ImportError:
+            self.parser = None
+            logger.error("❌ PDBParser could not be initialized (BioPython missing).")
         # 20 standard amino acids
         self.aa_map = {
             'ALA':0,'ARG':1,'ASN':2,'ASP':3,'CYS':4,
@@ -1978,6 +1987,8 @@ def generate_master_report(experiment_results, all_histories=None):
         clash_score, stereo_valid = 0.0, "N/A"
         pose_status = "Pass"
         try:
+             if 'Chem' not in globals():
+                 import rdkit.Chem as Chem
              mol = Chem.MolFromPDBFile(f"output_{name}.pdb")
              if mol:
                  qed = QED.qed(mol)
@@ -2135,7 +2146,7 @@ def run_scaling_benchmark():
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Helix-Flow ICLR Workshop Suite")
+    parser = argparse.ArgumentParser(description=f"MaxFlow {VERSION} ICLR Suite")
     parser.add_argument("--targets", nargs="+", default=["7SMV", "3PBL", "1AQ1", "5R8T"])
     parser.add_argument("--steps", type=int, default=100) # [v40.0] High-flux validation default
     parser.add_argument("--batch", type=int, default=32)  # [v40.0] High-flux validation default
@@ -2146,7 +2157,7 @@ if __name__ == "__main__":
     # [v35.8] Production Performance Guards
     torch.backends.cudnn.benchmark = True
 
-    print(f"🌟 Launching Helix-Flow v35.9 (ICLR Submission Final) ICLR Suite...")
+    print(f"🌟 Launching {VERSION} ICLR Suite...")
 
     all_results = []
     all_histories = {} # [v35.9] Collect histories for Fig 1a Overlay
@@ -2207,14 +2218,14 @@ if __name__ == "__main__":
         
         # [AUTOMATION] Package everything for submission
         import zipfile
-        zip_name = f"MaxFlow_v48.2_Kaggle_Golden.zip"
+        zip_name = f"MaxFlow_v48.5_Kaggle_Golden.zip"
         with zipfile.ZipFile(zip_name, "w") as z:
             files_to_zip = [f for f in os.listdir(".") if f.endswith((".pdf", ".pdb", ".tex"))]
             for f in files_to_zip:
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 MaxFlow v48.2 (Kaggle-Optimized Golden Submission) Completed.")
+        print(f"\n🏆 MaxFlow v48.5 (Kaggle-Optimized Golden Submission) Completed.")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:
