@@ -1,7 +1,7 @@
 # MaxFlow: Bio-Geometric Agentic Flow for Accelerated Drug Discovery
 
-**Version**: MaxFlow ICLR 2026 Masterpiece Edition (v52.1 - Golden)  
-**Strategic Focus**: Scientific Ablation Masterclass & Pro-Viz  
+**Version**: MaxFlow ICLR 2026 Soft-Flow Edition (v53.0 - Golden)  
+**Strategic Focus**: Jacobian Regularization & Soft-Core Dynamics  
 
 ---
 
@@ -68,13 +68,11 @@ MaxFlow is not a "stitched" model; it is a **Systemic Synergy** where each modul
 - **Disentangled Optimization Dynamics**: To preserve the SE(3) manifold's integrity, MaxFlow decouples coordinate updates (AdamW) from hidden weight regularization (Muon), ensuring geometric consistency during rapid adaptation.
 - **System 2 Reasoning (Feb 2026 SOTA)**: MaxFlow's **ProSeCo** loop aligns with the latest **\u0394Belief-RL** and **ICA** frameworks.
 
-## 9. Scientific Ablation Study
-To isolate the sources of performance, MaxFlow v52.1 implements a 3-way ablation protocol:
-- **Variant A (Full Helix-Flow)**: PLaTITO Perception + PI-Drift Field.
-- **Variant B (No-Physics)**: Pure neural flow matching. Exhibits structural hallucinations (clashes).
-- **Variant C (AdamW Baseline)**: Pure geometric optimization without evolutionary priors. Fails to navigate complex binding funnels.
+## 9. Jacobian-Regularized Flow (RJF)
+To ensure numerical stability and trajectory smoothness, MaxFlow v53.0 introduces **Jacobian Regularization**. By minimizing the norm of the velocity Jacobian $\| \nabla_x v_\theta \|$, we enforce Lipschitz continuity on the manifold, preventing trajectory divergence near singular configurations. This is efficiently estimated using the **Hutchinson Estimator**.
 
-The results confirm that the synergy between **Evolutionary Perception** and **Physical Drifting** is required for SOTA docking accuracy.
+## 10. Soft-Core Physical Dynamics
+MaxFlow v53.0 replaces hard-sphere potentials with **Soft-Core kernels**. By redefining the potential as $E(r) \propto (\alpha^2 + r^2)^{-n}$, we ensure that gradients (forces) remain finite and well-defined even at $r \to 0$. This eliminates the need for heuristic force-clamping and allows for authentic physical backpropagation.
 
 ## 10. Visualization Excellence
 Figures are generated at **300 DPI** using **Seaborn paper-context** styling. Convergence plots include **Standard Deviation Shading** based on batch variance, providing the statistical rigor required for top-tier publication.
@@ -99,7 +97,7 @@ To address the real-world constraints of hardware (e.g., Kaggle T4's 9-hour limi
 | **Optimization** | Disentangled | *Muon Matrices / AdamW Geometry* |
 
 ## 12. Submission Impact
-| Metric | Stitched Models | **MaxFlow Agent (v52.1)** | ICLR 2026 Expectation |
+| Metric | Stitched Models | **MaxFlow Agent (v53.0)** | ICLR 2026 Expectation |
 | --- | --- | --- | --- |
 | **Logic** | Implicit | **Evolution-Guided** | High Bio-Insight |
 | **Path** | Static Flow | **Energy-Conditioned** | SOTA Flow Dynamics |

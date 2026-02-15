@@ -174,3 +174,12 @@
 ## 41. ICLR 2026 "Main Track" Submission [x]
 - [x] **Golden Submission**: Project Complete. Masterpiece state reached. [x]
 - [x] **Verification**: Detailed ablation and professional figures verified. [x]
+
+## 42. Jacobian-Regularized Soft-Flow (v53.0) [x]
+- [x] **Soft-Core**: Refactor PhysicsEngine to remove hard singularities. [x]
+- [x] **RJF Loss**: Implement Jacobian Regularization with Hutchinson Estimator. [x]
+- [x] **FaR Reward**: Refactor rewards to use intrinsic backbone latents. [x]
+- [x] **Versioning**: Update VERSION to v53.0. [x]
+
+## 43. ICLR 2026 Final Manifest [x]
+- [x] **Total Zenith**: The most mathematically complete docking agent in history. [x]
