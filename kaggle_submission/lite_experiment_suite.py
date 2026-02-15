@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v58.4 MaxFlow (ICLR 2026 Golden Calculus Refined - Physics Hardened)"
+VERSION = "v58.5 MaxFlow (ICLR 2026 Golden Calculus Refined - Re-noising Fix)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1760,8 +1760,8 @@ class MaxFlowExperiment:
                         q_batched = q_sub.unsqueeze(0).repeat(B, 1)
                         x_batched = x_sub.unsqueeze(0).repeat(B, 1, 1)
                         
-                        e_val = self.phys.compute_energy(pos_L, p_batched, q_L, q_batched, x_L, x_batched, progress)
-                        e_val_sum = e_val.sum(dim=(1,2)) if e_val.ndim == 3 else e_val.sum(dim=1)
+                        e_soft_val, e_hard_val, _ = self.phys.compute_energy(pos_L, p_batched, q_L, q_batched, x_L, x_batched, progress)
+                        e_val_sum = e_soft_val + 100.0 * e_hard_val
                         
                         _, top_idx = torch.topk(e_val_sum, k=max(1, int(B*0.25)), largest=False)
                         mask = torch.ones(B, dtype=torch.bool, device=device)
