@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v48.3 MaxFlow (Kaggle-Optimized Golden)"
+VERSION = "v48.4 MaxFlow (Kaggle-Optimized Golden)"
 # [SCALING] ICLR Production Mode logic (controlled via CLI now)
 # Default seed for reproducibility
 torch.manual_seed(2025)
@@ -1428,28 +1428,29 @@ class MaxFlowExperiment:
             v_0 = out_0['v_pred']
             # Plot
             self.visualizer.plot_vector_field_2d(pos_L, v_0, p_center, filename=f"fig1_vectors_step0.pdf")
-             
+            
         # [GRPO Pro] Reference Model
         model_ref = MaxFlowBackbone(D, 64, no_mamba=self.config.no_mamba).to(device)
         model_ref.load_state_dict(backbone.state_dict())
         model_ref.eval()
         for p in model_ref.parameters(): p.requires_grad = False
-         if self.config.use_muon:
-             # [v46.0 Optimizer Surgery] Decouple Geometry from Muon
-             # Muon is specialized for weight matrices (Rank >= 2). 
-             # For ligand coordinates (pos_L, q_L, x_L), we must use AdamW to ensure SE(3) consistency.
-             params_muon = [p for p in model.parameters() if p.ndim >= 2]
-             params_adam = [p for p in model.parameters() if p.ndim < 2] + [pos_L, q_L, x_L]
-             
-             opt_muon = Muon(params_muon, lr=self.config.lr, ns_steps=5)
-             # [v35.4] Optimizer Sync: Match LR for geometry stability
-             opt_adam = torch.optim.AdamW(params_adam, lr=self.config.lr, weight_decay=1e-5) 
-             
-             # Step only Muon since AdamW is auxiliary, or use Multi-scheduler (v36.7)
-             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt_muon, T_max=self.config.steps)
+        
+        if self.config.use_muon:
+            # [v46.0 Optimizer Surgery] Decouple Geometry from Muon
+            # Muon is specialized for weight matrices (Rank >= 2). 
+            # For ligand coordinates (pos_L, q_L, x_L), we must use AdamW to ensure SE(3) consistency.
+            params_muon = [p for p in model.parameters() if p.ndim >= 2]
+            params_adam = [p for p in model.parameters() if p.ndim < 2] + [pos_L, q_L, x_L]
+            
+            opt_muon = Muon(params_muon, lr=self.config.lr, ns_steps=5)
+            # [v35.4] Optimizer Sync: Match LR for geometry stability
+            opt_adam = torch.optim.AdamW(params_adam, lr=self.config.lr, weight_decay=1e-5) 
+            
+            # Step only Muon since AdamW is auxiliary, or use Multi-scheduler (v36.7)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt_muon, T_max=self.config.steps)
         else:
-             opt = torch.optim.AdamW(params, lr=self.config.lr, weight_decay=1e-5)
-             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.config.steps)
+            opt = torch.optim.AdamW(params, lr=self.config.lr, weight_decay=1e-5)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.config.steps)
         
         # [NEW] AMP & Stability Tools
         scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
