@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v56.1 MaxFlow (ICLR 2026 Flexible Evolution Hotfix)"
+VERSION = "v56.2 MaxFlow (ICLR 2026 Flexible Evolution Hotfix 2)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1811,9 +1811,11 @@ class MaxFlowExperiment:
                 # [v34.1] GRPO-MaxRL: Advantage-Weighted Flow Matching
                 # 1. Target Force from Physics
                 # [v53.0 Soft-Flow] Deep Physics Gradient (No Clamping)
-                # Soft-Core potentials enable direct backprop without numerical explosions.
                 force = -torch.autograd.grad(batch_energy.sum(), pos_L, create_graph=False, retain_graph=True)[0]
                 force = force.detach()
+                
+                # [v56.2] Explicitly calculate distance for kernel-smoothed drift
+                dist_sq = torch.cdist(pos_L_reshaped, pos_P_batched).pow(2) # (B, N, M)
                 
                 # [v56.0] Kernel-Smoothed Drift (Gaussian Smoothing for Singularities)
                 # Prevents "5-valent carbon" and explosive repulsive forces

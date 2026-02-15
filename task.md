@@ -230,3 +230,7 @@
 ## 51. The Flexible Hotfix (v56.1) [x]
 - [x] **Shape Fix**: Resolve RuntimeError (448 vs 64) in anchor reward. [x]
 - [x] **Versioning**: Update VERSION to v56.1. [x]
+
+## 52. The Kernel Hotfix (v56.2) [x]
+- [x] **NameError Fix**: Explicitly define `dist_sq` for Kernel-Smoothed Drift. [x]
+- [x] **Versioning**: Update VERSION to v56.2. [x]
