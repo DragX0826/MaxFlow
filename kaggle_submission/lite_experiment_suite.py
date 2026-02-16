@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v60.8 MaxFlow (ICLR 2026 Golden Calculus Refined - Indentation Fix)"
+VERSION = "v61.0 MaxFlow (ICLR 2026 Golden Calculus Refined - Thermal Resurrection)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -229,6 +229,7 @@ class SimulationConfig:
     maxrl_temp: float = 1.0
     output_dir: str = "./results"
     accum_steps: int = 16 # [v40.0] High-flux validation steps
+    redocking: bool = False # [v61.0] Force Pocket-Aware Center for validation
 
 class FlowData:
     """Container for molecular graph data (Nodes, Edges, Batches)."""
@@ -1694,6 +1695,13 @@ class MaxFlowExperiment:
         # 激進派允許鍵長扭曲 (便於穿牆)，保守派嚴格遵守化學鍵
         bond_factors = 2.0 - 1.5 * miner_genes # Range: [2.0, 0.5]
 
+        # [v61.0 Debug] Force Correct Pocket Center (Redocking Mode)
+        # 如果開啟 Redocking，強制將搜索中心對準原位配體，並縮減初始噪聲
+        if self.config.redocking:
+            logger.info("   🚀 [Redocking] Pocket-Aware Mode active. Centering on ground truth.")
+            p_center = pos_native.mean(dim=0)
+            noise_scales = torch.ones_like(noise_scales) * 5.0 # Pocket-local search
+            
         # 3. 應用多樣化噪聲
         pos_L = (p_center.view(1, 1, 3) + torch.randn(B, N, 3, device=device) * noise_scales).detach()
         pos_L.requires_grad = True
@@ -2085,9 +2093,9 @@ class MaxFlowExperiment:
                 # Update v_pred with clipped values for the rest of the loop/trajectory
                 v_pred = v_pred_clipped
                 
-                # [v59.7 Relaxed Early Stopping]
-                # During critical exploration (Langevin injection), we allow more time.
-                if step < 500: 
+                # [v61.0 Fix] Minimum Effort Constraint
+                # 在 Step 800 之前，禁止 Early Stopping，強制進行全局探索
+                if step < 800: 
                     patience_counter = 0 
                 elif current_metric < best_metric - 0.001: # Finer threshold
                     best_metric = current_metric
@@ -2096,8 +2104,22 @@ class MaxFlowExperiment:
                     patience_counter += 1
                     
                 if patience_counter >= MAX_PATIENCE:
-                    logger.info(f"   🛑 Early Stopping at step {step} (Converged at {best_metric:.2f})")
-                    break
+                    # [v61.0 SOTA Logic] Cyclic Annealing / Thermal Resurrection
+                    # 如果在早期偵測到收斂，發動「熱衝擊」炸出局部極小值
+                    if step < 800:
+                        logger.info(f"   🔥 [Resurrection] Convergence detected at Step {step} (E={current_metric:.2f}). Triggering Thermal Shock!")
+                        
+                        # 1. 劇烈增加噪聲 (Stochastic Ejection)
+                        pos_L.data += torch.randn_like(pos_L) * 5.0
+                        
+                        # 2. 重置 Alpha (Manifold Soft-Reset)
+                        self.phys.current_alpha = 5.0 
+                        
+                        # 3. 重置 Patience
+                        patience_counter = 0
+                    else:
+                        logger.info(f"   🛑 Early Stopping at step {step} (Converged at {best_metric:.2f})")
+                        break
                 
                 # [v58.1] Selection logic for Visualization
                 best_idx = batch_energy.argmin().item()
