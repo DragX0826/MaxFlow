@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.8 MaxFlow (ICLR 2026 Golden Calculus Refined - Absolute Zero Strategy)"
+VERSION = "v62.9 MaxFlow (ICLR 2026 Golden Calculus Refined - True North Refinement)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -245,9 +245,9 @@ class ForceFieldParameters:
     Includes atom-specific VdW radii, bond constants, etc.
     """
     def __init__(self):
-        # [v61.9 Fix] Restore Natural VdW Radii (Removing static 0.80x shrinkage)
-        # Prevents "Double Shrinkage" when combined with dynamic radius_scale.
-        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device)
+        # Atomic Radii (Angstroms) for C, N, O, S, F, P, Cl, Br, I
+        # [v61.6 Fix] Extreme Atomic Shrinkage (0.80x) to allow high-density biological packing
+        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device) * 0.80
         # Epsilon (Well depth, kcal/mol)
         self.epsilon = torch.tensor([0.1, 0.1, 0.15, 0.2, 0.1, 0.2, 0.2, 0.2, 0.3], device=device)
         # [v57.0] Standard Valencies for C, N, O, S, F, P, Cl, Br, I
@@ -278,8 +278,7 @@ class PhysicsEngine:
         self.params = ff_params
         # [v58.1] Golden Calculus: Force-Magnitude Annealing
         self.current_alpha = self.params.softness_start
-        # [v62.3 Fix C] Slower Annealing for better infiltration
-        self.hardening_rate = 0.05 
+        self.hardening_rate = 0.1 
         self.max_force_ema = 1.0 # [v58.1] Normalize decay rate
 
     def reset_state(self):
@@ -347,9 +346,9 @@ class PhysicsEngine:
             dist = torch.sqrt(dist_sq + 1e-9)
             
             # 2. Van der Waals Param Retrieval
-            # [v61.8 SOTA Logic] Dynamic Radius Refinement (Soft Docking)
-            # 0.6x (Infiltration) -> 0.85x (Seating). Prevents early jamming and late ejection.
-            radius_scale = 0.6 + 0.25 * step_progress 
+            # [v61.7 SOTA Logic] Variable Atomic Radii (The Ghost Protocol)
+            # 初期原子很小(0.5x)，允許鑽進深口袋；後期變大(0.9x)，產生正確的 VdW 接觸
+            radius_scale = 0.5 + 0.4 * step_progress # 0.5 -> 0.9
             
             type_probs_L = x_L[..., :9]
             radii_L = (type_probs_L @ self.params.vdw_radii[:9].float()) * radius_scale
@@ -382,26 +381,25 @@ class PhysicsEngine:
             
             # [v61.2 Fix] Softer Shield Start: Allow early-stage penetration
             # [v61.5 Fix] Nuclear Ghosting (Quantum Tunneling)
-            # [v61.8 Fix] Soft Nuclear Shield: Max weight 100.0 to prevent infinite walls
+            # Disable repulsion for first 30% of steps to allow pocket infiltration
             if step_progress < 0.3:
                 w_nuc = 0.0
             else:
                 adjusted_progress = (step_progress - 0.3) / 0.7
-                # Ramp up weight: 0.1 (original start) -> 100.0 (end) with quadratic ramp
-                w_nuc = 0.1 + 99.9 * (adjusted_progress**2)
+                # Ramp up weight: 0.1 (original start) -> 1000.0 (end) with cubic ramp
+                w_nuc = 0.1 + 999.9 * (adjusted_progress**3)
             
             # Calculate repulsion but clamp the MAXIMUM energy value
-            # [v61.8 Fix] Deep Shield Cutoff (0.5A) with soft clamp (500)
+            # [v61.3 Fix] Deep Shield Cutoff (0.5A)
             raw_repulsion = (0.5 / r_safe).pow(12)
-            clamped_repulsion = torch.clamp(raw_repulsion, max=500.0) 
+            clamped_repulsion = torch.clamp(raw_repulsion, max=1e4) # Cap at 10,000 kcal/mol per atom pair
             
             nuclear_repulsion = w_nuc * clamped_repulsion.sum(dim=(1,2))
             
             # [v61.4 Fix] Centripetal Suction (Solvent Exclusion Proxy)
-            # [v61.8 Fix] Suction Decay: Shut down after 70% to allow wall-seating
-            suction_decay = max(0.0, 1.0 - (step_progress / 0.7)**2)
+            # Pulls ligand atoms towards the joint pocket center to force occupancy
             dist_to_center = torch.norm(pos_L_aligned, dim=-1) # (B, N)
-            e_suction = 0.5 * dist_to_center.pow(2).mean(dim=-1) * suction_decay # (B,)
+            e_suction = 0.5 * dist_to_center.pow(2).mean(dim=-1) # (B,)
             
             # [v59.1 Fix] Attention-weighted Forces (Soft Distogram Simulation)
             attn_weights = F.softmax(-dist / 1.0, dim=-1) # (B, N, M)
@@ -751,12 +749,7 @@ class RealPDBFeaturizer:
             center = pos_P.mean(0)
             pos_P = pos_P - center
             pos_native = pos_native - center
-            
-            # [v62.7 Fix A: True North Calibration]
-            # In Redocking tasks, the ground truth ligand's centroid is the REAL pocket center.
-            # Navigation to (0,0,0) (protein core) was the cause of previous structural collapses.
-            pocket_center = pos_native.mean(dim=0).detach() 
-            logger.info(f"   🧭 [True North] Pocket calibrated to Native Ligand centroid: {pocket_center.cpu().numpy()}")
+            pocket_center = torch.zeros(3, device=device) # Now the Protein Centroid
             
             return pos_P, x_P, q_P, (pocket_center, pos_native)
         except Exception as e:
@@ -1727,11 +1720,10 @@ class MaxFlowExperiment:
 
         # [v61.0 Debug] Force Correct Pocket Center (Redocking Mode)
         # 如果開啟 Redocking，強制將搜索中心對準原位配體，並縮減初始噪聲
-        # [v62.7 Fix A: True North] p_center is already calibrated in the featurizer.
+        # [v62.9 True North] p_center is already calibrated in the featurizer.
         if self.config.redocking:
             logger.info("   🚀 [Redocking] Pocket-Aware Mode active. Centering on ground truth.")
-            # noise_scales = torch.ones_like(noise_scales) * 5.0 # Pocket-local search (v61.0)
-            # [v62.7] Even tighter start: noise scale 3.0 to ensure pocket entry
+            # [v62.9 Genesis Initialization] Tighter noise scale 3.0 ensuring pocket entry
             noise_scales = torch.ones_like(noise_scales) * 3.0
             
         # 3. 應用多樣化噪聲
@@ -1966,43 +1958,18 @@ class MaxFlowExperiment:
                                 else:
                                     market_base_scores = -batch_energy
                             
-                                centroids = pos_L.mean(dim=1) # (B, 3)
-                                # [v61.8 Fix] Restore Diversity: Mean distance of ligand centroids to others in batch
-                                diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
+                            centroids = pos_L.mean(dim=1) # (B, 3)
+                            # Diversity = Mean distance of ligand centroids to others in batch
+                            diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
+                            # CRPS Score = -Energy + 0.1 * Diversity (Selection from Base Score pool)
+                            market_scores = market_base_scores + 0.1 * diversity
                             
-                                # [v61.9 Fix] Pauli Exclusion Principle: Check for internal atom collisions
-                                # If atoms within a miner are too close (< 0.7A), it's a "Singularity"
-                                pos_L_square = pos_L.unsqueeze(2) # (B, N, 1, 3)
-                                pos_L_square_T = pos_L.unsqueeze(1) # (B, 1, N, 3)
-                                # (B, N, N)
-                                internal_dist_sq = (pos_L_square - pos_L_square_T).pow(2).sum(dim=-1)
-                                # Add 10.0 to diagonal to ignore self-distance
-                                internal_dist = torch.sqrt(internal_dist_sq + torch.eye(N, device=device).unsqueeze(0) * 10.0)
-                                is_collapsed = internal_dist.min(dim=1)[0].min(dim=1)[0] < 0.7 # (B,)
-                            
-                                # [v61.8 Fix] The Market-Flow: Z-Score Normalization
-                                # Balance Energy and Diversity via normalized units
-                                e_std = batch_energy.std() + 1e-6
-                                norm_energy = (batch_energy - batch_energy.mean()) / e_std
-                                
-                                div_std = diversity.std() + 1e-6
-                                norm_diversity = (diversity - diversity.mean()) / div_std
-                                
-                                # [v62.1 Fix B] Market Regulation: Diversity only for stable configurations (E < 0)
-                                is_stable = batch_energy < 0.0
-                                market_scores = -0.7 * norm_energy
-                                # Reward diversity (+) for stable, penalize (-) for unstable (explosion-seeking)
-                                market_scores[is_stable] += 0.3 * norm_diversity[is_stable]
-                                market_scores[~is_stable] -= 0.5 * norm_diversity[~is_stable]
-
-                                # Apply Pauli Penalty: Cull collapsed miners
-                                market_scores[is_collapsed] -= 1e6
-                                
                             _, top_indices = torch.topk(market_scores, k=4)
                             _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
                             
-                            logger.info(f"   ⚖️ [Market-Flow] {validly_mask.sum().item()}/{B} Valid | Diversifying populations...")
-
+                            valid_count = validly_mask.sum().item()
+                            logger.info(f"   ⚖️  [Market-Flow] {valid_count}/{B} Valid | Culling {bottom_indices.tolist()} | Survivors: {top_indices.tolist()}")
+                            
                             # Clone survivors + Mutate (Stochastic Noise)
                             for i in range(4):
                                 src_idx = top_indices[i]
@@ -2011,11 +1978,15 @@ class MaxFlowExperiment:
                                 pos_L.data[dst_idx] = pos_L.data[src_idx] + torch.randn_like(pos_L[dst_idx]) * (0.5 * (1.0 - progress))
                                 q_L.data[dst_idx] = q_L.data[src_idx].detach().clone()
                                 x_L.data[dst_idx] = x_L.data[src_idx].detach().clone()
+                                
+                                # [v60.6] The Viral Update (Parameter Infection)
+                                # 這是演化算法的核心：強者的基因會統治種群
                                 noise_scales.data[dst_idx] = noise_scales.data[src_idx].clone()
                                 bond_factors.data[dst_idx] = bond_factors.data[src_idx].clone()
-
+                                
                                 # [v60.8] DNA Mutation (10% chance)
                                 if random.random() < 0.1:
+                                    # Use scalar for mutation to avoid broadcast errors [RuntimeError Fix]
                                     mutation = 0.8 + 0.4 * random.random() # 0.8 ~ 1.2
                                     bond_factors.data[dst_idx] *= mutation
 
@@ -2054,8 +2025,7 @@ class MaxFlowExperiment:
                 # [v60.5 Fix] Alpha Rescue Logic (Auto-Softening)
                 # If average energy exceeds 1000, soften the manifold to avoid crashes
                 # [v61.7 Fix] Strict Rescue Ban: 只在前 80% 的步驟允許救援，最後階段必須硬著陸
-                # [v62.3 Fix C] Higher Rescue Threshold (2000) to allow hard-pocket entry
-                if batch_energy.mean() > 2000.0 and step < self.config.steps * 0.8:
+                if batch_energy.mean() > 1000.0 and step < self.config.steps * 0.8:
                     self.phys.current_alpha = max(self.phys.current_alpha, 2.0)
                     if step % 10 == 0:
                         logger.info(f"   🛡️  [Alpha-Rescue] High Energy ({batch_energy.mean():.1f}) detect, softening alpha=2.0")
@@ -2067,25 +2037,6 @@ class MaxFlowExperiment:
                     if step % 50 == 0:
                         logger.info("   💎 [The Ghost Protocol] Terminal Polishing: Alpha=0.1, Noise=0")
                 
-                # [v62.6 Fix A] The Nuclear Option: Hard Coordinate Reset at Step 200
-                if step == 200:
-                    with torch.no_grad():
-                        # Calculate current Rg
-                        center = pos_L_reshaped.mean(dim=1, keepdim=True)
-                        vecs = pos_L_reshaped - center
-                        rg_current = torch.sqrt(vecs.pow(2).sum(-1).mean(-1)) # (B,)
-                        
-                        # Find collapsed miners (Rg < 3.0A)
-                        collapsed_mask = rg_current < 3.0
-                        if collapsed_mask.any():
-                            logger.info(f"   ☢️  [Nuclear Option] Detonating {collapsed_mask.sum().item()} collapsed pebbles.")
-                            # Forceful expansion: push atoms to 3.0-4.0A from centroid
-                            stuck_vecs = vecs[collapsed_mask]
-                            dirs = stuck_vecs / (stuck_vecs.norm(dim=-1, keepdim=True) + 1e-6)
-                            # New lengths: 3.0 + random noise (3.0-4.0A)
-                            new_lengths = 3.0 + torch.rand(stuck_vecs.shape[0], stuck_vecs.shape[1], 1, device=device) * 1.0
-                            pos_L_reshaped.data[collapsed_mask] = center[collapsed_mask] + dirs * new_lengths
-                
                 # Hierarchical Engine Call
                 e_soft, e_hard, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
                                                                x_L_for_physics, x_P_batched, progress)
@@ -2093,10 +2044,16 @@ class MaxFlowExperiment:
                 # Internal Geometry (Bonds & Angles)
                 e_bond = self.phys.calculate_internal_geometry_score(pos_L_reshaped) 
                 
-                # [v62.0 Fix A] Rubber Band Bonds: Dynamic Stiffness
-                # Instead of a zero-stiffness phase, maintain a base of 10.0 and ramp to 200.0
-                # This ensures atoms "stay together" despite strong repulsive forces.
-                w_bond_base = 10.0 + 190.0 * (progress ** 2)
+                # [v60.0 Relaxed Harmonic Constraints]
+                # Lower weights (100.0/10.0 instead of 500/50) to prevent "Hardening too fast"
+                # [v61.5 Fix] Liquid State (The Fluid Swarm): Zero stiffness for first 50%
+                # This allows perfect induced fit before freezing the conformation.
+                if progress < 0.5:
+                    w_bond_base = 0.0
+                else:
+                    # Ramp up w_bond_base starting from 0.5
+                    adj_progress = (progress - 0.5) / 0.5
+                    w_bond_base = 1.0 + (100.0 - 1.0) * (adj_progress ** 1.5)
                 
                 w_hard = 1.0 + (10.0 - 1.0) * (progress ** 1.5)
                 
@@ -2116,12 +2073,8 @@ class MaxFlowExperiment:
                 # [v58.2] Set create_graph=False as v_target is detached. 
                 force_total = -torch.autograd.grad(total_energy.sum(), pos_L, create_graph=False, retain_graph=True)[0]
                 
-                # [v62.0 Fix B] Tanh Soft-Clamp Ceiling (100.0)
-                # Allowing large gradients for clash resolution but preventing infinite explosion.
-                # v_target = self.phys.soft_clip_vector(force_total.detach(), max_norm=20.0) # Old
-                norm = force_total.norm(dim=-1, keepdim=True)
-                scale = (100.0 * torch.tanh(norm / 100.0)) / (norm + 1e-6)
-                v_target = force_total.detach() * scale
+                # [v59.2 Fix] Use Direction-Preserving Soft-Clip instead of Hard Clamp
+                v_target = self.phys.soft_clip_vector(force_total.detach(), max_norm=20.0)
                 
                 # Update Annealing based on Force Magnitude
                 f_mag = v_target.norm(dim=-1).mean().item()
@@ -2129,10 +2082,7 @@ class MaxFlowExperiment:
                 
                 # The Golden Triangle Loss
                 # Pillar 1: Physics-Flow Matching (v58.6: Huber Loss for outlier robustness)
-                # [v62.5 Fix C] Mute the NN: Scale FM loss weight over first 200 steps
-                # [v62.6 Fix B] NN Lobotomy: Early steps ( < 200 ) FM weight = 0.0
-                fm_weight = 0.0 if step < 200 else 1.0
-                loss_fm = fm_weight * F.huber_loss(v_pred, v_target, delta=1.0)
+                loss_fm = F.huber_loss(v_pred, v_target, delta=1.0)
                 
                 # Pillar 2: Geometric Smoothing (RJF)
                 jacob_reg = torch.zeros(1, device=device)
@@ -2148,79 +2098,14 @@ class MaxFlowExperiment:
                 s_mean = s_current.view(B, N, -1).mean(dim=1) # (B, H)
                 loss_semantic = (s_mean - esm_anchor.view(B, -1)).pow(2).mean()
                 
-                # [v62.0 Fix C] Molecular Cohesion: Connectivity Potential
-                # Penalize any atom whose nearest neighbor is further than 1.6A.
-                dist_matrix = torch.cdist(pos_L, pos_L) + torch.eye(N, device=device).unsqueeze(0) * 10.0
-                min_neighbor_dist = dist_matrix.min(dim=-1)[0] # (B, N)
-                loss_cohesion = torch.relu(min_neighbor_dist - 1.6).pow(2).mean()
-
-                # [v62.6 Fix C] Hard Sphere Core: Absolute Repulsion for d < 1.2A
-                # Massive repulsion term to block internal collapse
-                loss_core = 1000.0 * torch.relu(1.2 - dist_matrix).mean()
-
-                # [v62.7 Fix B] Dark Energy Expansion: Ensure healthy Int-RMSD
-                # Current spread: mean distance from centroid
-                current_spread = (pos_L_reshaped - pos_L_reshaped.mean(dim=1, keepdim=True)).norm(dim=-1).mean(dim=1) # (B,)
-                loss_dark_energy = torch.relu(1.5 - current_spread).pow(2).mean()
-
-                # [v62.1 Fix A] Radius of Gyration (Rg) Penalty: Compactness
-                # [v62.3 Fix A] Delayed Compactness: Only active after 500 steps
-                center_of_mass = pos_L_reshaped.mean(dim=1, keepdim=True)
-                dist_to_com = (pos_L_reshaped - center_of_mass).norm(dim=-1)
-                rg = torch.sqrt(dist_to_com.pow(2).mean(dim=-1))
+                # [v62.9 True North] Centroid Traction Loss
+                # Gently pull the ligand's centroid towards the pocket center (p_center)
+                # This prevents "Pocket Escape" without causing structural collapse.
+                ligand_centroid = pos_L.mean(dim=1) # (B, 3)
+                loss_traction = (ligand_centroid - p_center.view(1, 3)).pow(2).mean()
                 
-                # [v62.5 Fix A] Minimum Size Constraint: Prevent Collapse
-                # If Rg < 2.5A, apply heavy penalty to expand
-                loss_collapse = torch.relu(2.5 - rg).mean()
-                
-                loss_compact = torch.zeros(1, device=device)
-                if step > 500:
-                    loss_compact = torch.relu(rg - 5.5).pow(2)
-
-                # [v62.3 Fix B] Tractor Beam: Persistent Harmonic Anchor
-                # [v62.4 Fix A] Centroid-Only Traction: Apply force to whole molecule center
-                centroid = pos_L_reshaped.mean(dim=1, keepdim=True) # (B, 1, 3)
-                dist_to_pocket = (centroid - p_center).norm(dim=-1) # (B, 1)
-                anchor_weight = 10.0 * (1.0 - progress)
-                loss_anchor = 20.0 * anchor_weight * dist_to_pocket.mean()
-
-                # [v62.4 Fix B] Big Bang Inflation: Expand compacted structure in stage 0
-                loss_inflation = torch.tensor(0.0, device=device)
-                if step < 200:
-                    # dist_matrix from cohesion logic (line 2138)
-                    inv_dist = 1.0 / (dist_matrix + 1e-6)
-                    loss_inflation = 50.0 * inv_dist.mean()
-
-                # [v62.2 Fix C] Bond Expansion: Prevent Over-compression
-                # If nearest neighbor < 1.4A,施加推力把它推回 1.5A
-                loss_expansion = torch.relu(1.5 - min_neighbor_dist).pow(2).mean()
-
-                # [v62.8 Fix A] Free Fall: Silence artificial forces after 70% progress
-                # [v62.8 Fix C] Final Annealing: Hard-set alpha to 0.01 after 90% progress
-                if progress > 0.7:
-                    loss_dark_energy = 0.0
-                    loss_compact = torch.zeros_like(loss_compact)
-                    loss_anchor = 0.0
-                    loss_expansion = 0.0
-                    
-                    # [Fix C] Hard-set alpha for Absolute Zero precision
-                    if progress > 0.9:
-                        self.phys.current_alpha = 0.01
-                    
-                    # Scale down learning rates to simulate "Cooling" (Absolute Zero)
-                    # This replaces the dt_euler *= 0.1 logic in TTT mode
-                    if step % accum_steps == 0:
-                        for g in opt_muon.param_groups if self.config.use_muon else opt.param_groups:
-                            g['lr'] = self.config.lr * 0.1
-                        if self.config.use_muon:
-                            for g in opt_adam.param_groups:
-                                g['lr'] = self.config.lr * 0.1
-
-                # Unified Formula: FM + RJF + Semantic + Cohesion + Compactness + Anchor + Inflation + Expansion + Collapse + Core + DarkEnergy
-                loss = (loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 
-                        5.0 * loss_cohesion + 2.0 * loss_compact.mean() + 
-                        loss_anchor + loss_inflation + 20.0 * loss_expansion +
-                        50.0 * loss_collapse + loss_core + 100.0 * loss_dark_energy)
+                # Unified Formula: FM + RJF + Semantic + Traction
+                loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 5.0 * loss_traction
 
                 # [v59.5 Fix] NaN Sentry inside the loop
                 # Check for NaNs immediately after backward
@@ -2256,30 +2141,14 @@ class MaxFlowExperiment:
                 
                 # [v61.0 Fix] Minimum Effort Constraint
                 # 在 Step 800 之前，禁止 Early Stopping，強制進行全局探索
-                # [v62.8 Fix B] Overtime: Disable ES before Step 1000 unless already highly optimized
-                if step < 1000 and current_metric > -5.0: 
+                if step < 800: 
                     patience_counter = 0 
                 elif current_metric < best_metric - 0.001: # Finer threshold
                     best_metric = current_metric
                     patience_counter = 0
                 else:
                     patience_counter += 1
-                
-                # [v61.8 Fix] Seismic Rescue (The Shake-up)
-                # If stuck at 4.8A trap mid-simulation, apply random rotational resets
-                if 600 < step < 900 and patience_counter > 10 and step % 50 == 0:
-                    logger.info("   ⚠️ [Seismic Rescue] Stuck in local min detected! Applying strong rotation.")
-                    with torch.no_grad():
-                        # Rand rot using scipy
-                        rand_rot = Rotation.random(num=B).as_matrix()
-                        rand_rot_t = torch.tensor(rand_rot, device=device, dtype=torch.float32)
-                        # Rotate around COM
-                        centroids_L = pos_L.mean(dim=1, keepdim=True)
-                        pos_L.data = torch.bmm(pos_L - centroids_L, rand_rot_t) + centroids_L
-                        # Reset manifold softness
-                        self.phys.current_alpha = 3.0 
-                        patience_counter = 0
-
+                    
                 if patience_counter >= MAX_PATIENCE:
                     # [v61.0 SOTA Logic] Cyclic Annealing / Thermal Resurrection
                     # 如果在早期偵測到收斂，發動「熱衝擊」炸出局部極小值
@@ -2358,8 +2227,8 @@ class MaxFlowExperiment:
                     else:
                         scaler.unscale_(opt)
                     
-                    # [v59.5 Fix] Stronger Gradient Clipping (Clip 10.0 for 61.8 flips)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0) 
+                    # [v59.5 Fix] Stronger Gradient Clipping (0.5 instead of 1.0) for high-rigidity stability
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                     
                     if self.config.use_muon:
                         scaler.step(opt_muon)
@@ -2378,10 +2247,6 @@ class MaxFlowExperiment:
                 if self.config.mode == "inference":
                     with torch.no_grad():
                         dt_euler = 1.0 / self.config.steps
-                        # [v62.1 Fix C] Oscillation Damping: 0.1x update in final stretch
-                        if progress > 0.8:
-                            dt_euler *= 0.1
-                        
                         drift_coeff = 1.0 - t_val 
                         
                         # Calculate Physics Residual Drift: u_t = (Force - Neural Prediction)
