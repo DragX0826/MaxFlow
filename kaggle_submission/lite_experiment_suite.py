@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v61.5 MaxFlow (ICLR 2026 Golden Calculus Refined - The Ghost Walker)"
+VERSION = "v61.6 MaxFlow (ICLR 2026 Golden Calculus Refined - Micro-Annealing)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -246,8 +246,8 @@ class ForceFieldParameters:
     """
     def __init__(self):
         # Atomic Radii (Angstroms) for C, N, O, S, F, P, Cl, Br, I
-        # [v61.3 Fix] Atomic Shrinkage (0.85x) to allow Induced Fit packing
-        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device) * 0.85
+        # [v61.6 Fix] Extreme Atomic Shrinkage (0.80x) to allow high-density biological packing
+        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device) * 0.80
         # Epsilon (Well depth, kcal/mol)
         self.epsilon = torch.tensor([0.1, 0.1, 0.15, 0.2, 0.1, 0.2, 0.2, 0.2, 0.3], device=device)
         # [v57.0] Standard Valencies for C, N, O, S, F, P, Cl, Br, I
@@ -2019,10 +2019,16 @@ class MaxFlowExperiment:
                 
                 # [v60.5 Fix] Alpha Rescue Logic (Auto-Softening)
                 # If average energy exceeds 1000, soften the manifold to avoid crashes
-                if batch_energy.mean() > 1000.0:
+                # [v61.6 Fix] Alpha-Rescue Guard: Don't rescue in the final stretch!
+                if batch_energy.mean() > 1000.0 and step < self.config.steps - 100:
                     self.phys.current_alpha = max(self.phys.current_alpha, 2.0)
                     if step % 10 == 0:
                         logger.info(f"   🛡️  [Alpha-Rescue] High Energy ({batch_energy.mean():.1f}) detect, softening alpha=2.0")
+                
+                # [v61.6 Fix] Terminal Polishing (Micro-Annealing)
+                # Force alpha to minimum precision (0.1) in the last 100 steps
+                if step >= self.config.steps - 100:
+                    self.phys.current_alpha = 0.1
                 
                 # Hierarchical Engine Call
                 e_soft, e_hard, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
@@ -2239,7 +2245,8 @@ class MaxFlowExperiment:
                         
                         # [v59.7] Langevin Injection with Adaptive Noise Scale
                         # Transformations ODE solve to Stochastic Differential Equation (SDE)
-                        if step >= 300: # Apply noise after initial settlement
+                        # [v61.6 Fix] Micro-Annealing: Turn off noise at final stretch for precision
+                        if step >= 300 and step < self.config.steps - 100: 
                             # Detect "Stuck" state: current energy relative to best
                             curr_e = batch_energy.mean().item()
                             self.energy_ma = 0.9 * (self.energy_ma if self.energy_ma is not None else curr_e) + 0.1 * curr_e
