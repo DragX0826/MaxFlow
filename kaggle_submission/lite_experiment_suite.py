@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.3 MaxFlow (ICLR 2026 Golden Calculus Refined - Ghost Infiltration Protocol)"
+VERSION = "v62.4 MaxFlow (ICLR 2026 Golden Calculus Refined - The Big Bang Strategy)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -2060,6 +2060,20 @@ class MaxFlowExperiment:
                     if step % 50 == 0:
                         logger.info("   💎 [The Ghost Protocol] Terminal Polishing: Alpha=0.1, Noise=0")
                 
+                # [v62.4 Fix C] Strategic Teleport: Reset stuck miners at Step 100
+                if step == 100:
+                    with torch.no_grad():
+                        current_centroids = pos_L_reshaped.mean(dim=1) # (B, 3)
+                        current_rmsd = (current_centroids - p_center).norm(dim=-1) # (B,)
+                        stuck_mask = current_rmsd > 5.0
+                        if stuck_mask.any():
+                            logger.info(f"   ⚠️  [Big Bang] Teleporting {stuck_mask.sum().item()} stuck miners to pocket center.")
+                            # Translate internal structure to p_center
+                            # (B_stuck, N, 3) - (B_stuck, 1, 3) + (1, 1, 3)
+                            stuck_pos = pos_L_reshaped[stuck_mask]
+                            stuck_com = current_centroids[stuck_mask].unsqueeze(1)
+                            pos_L_reshaped.data[stuck_mask] = (stuck_pos - stuck_com) + p_center.view(1, 1, 3) + torch.randn_like(stuck_pos) * 0.2
+                
                 # Hierarchical Engine Call
                 e_soft, e_hard, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
                                                                x_L_for_physics, x_P_batched, progress)
@@ -2135,18 +2149,27 @@ class MaxFlowExperiment:
                     loss_compact = torch.relu(rg - 5.5).pow(2)
 
                 # [v62.3 Fix B] Tractor Beam: Persistent Harmonic Anchor
-                # Pulls molecule center towards pocket center without stage limit.
+                # [v62.4 Fix A] Centroid-Only Traction: Apply force to whole molecule center
+                centroid = pos_L_reshaped.mean(dim=1, keepdim=True) # (B, 1, 3)
+                dist_to_pocket = (centroid - p_center).norm(dim=-1) # (B, 1)
                 anchor_weight = 10.0 * (1.0 - progress)
-                loss_anchor = anchor_weight * (pos_L_reshaped.mean(dim=1) - p_center).norm(dim=-1).mean()
+                loss_anchor = 20.0 * anchor_weight * dist_to_pocket.mean()
+
+                # [v62.4 Fix B] Big Bang Inflation: Expand compacted structure in stage 0
+                loss_inflation = torch.tensor(0.0, device=device)
+                if step < 200:
+                    # dist_matrix from cohesion logic (line 2119)
+                    inv_dist = 1.0 / (dist_matrix + 1e-6)
+                    loss_inflation = 50.0 * inv_dist.mean()
 
                 # [v62.2 Fix C] Bond Expansion: Prevent Over-compression
                 # If nearest neighbor < 1.4A,施加推力把它推回 1.5A
                 loss_expansion = torch.relu(1.5 - min_neighbor_dist).pow(2).mean()
 
-                # Unified Formula: FM + RJF + Semantic + Cohesion + Compactness + Anchor + Expansion
+                # Unified Formula: FM + RJF + Semantic + Cohesion + Compactness + Anchor + Inflation + Expansion
                 loss = (loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 
                         5.0 * loss_cohesion + 2.0 * loss_compact.mean() + 
-                        loss_anchor + 20.0 * loss_expansion)
+                        loss_anchor + loss_inflation + 20.0 * loss_expansion)
 
                 # [v59.5 Fix] NaN Sentry inside the loop
                 # Check for NaNs immediately after backward
