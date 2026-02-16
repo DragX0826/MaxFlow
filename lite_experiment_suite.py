@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v63.0 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Ideal Gas Strategy)"
+VERSION = "v63.1 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Spiked Ball Strategy)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -345,9 +345,9 @@ class PhysicsEngine:
             dist_sq = diff.pow(2).sum(dim=-1)
             dist = torch.sqrt(dist_sq + 1e-9)
             
-            # [v63.0 Ideal Gas] Accelerated Expansion: Reach physical scale 1.0x faster
-            # 初期原子小(0.5x)，允許鑽進深口袋；中期快速變大(1.0x)，產生正確的 VdW 接觸
-            radius_scale = 0.5 + 0.5 * (step_progress ** 0.5) # 0.5 -> 1.0 (Sqrt growth)
+            # [v63.1 Spiked Ball] Hard Radii: Set 1.0x from Step 0 to avoid "fusion prison"
+            # No more ghosting. Use constant physical scale.
+            radius_scale = 1.0
             
             type_probs_L = x_L[..., :9]
             radii_L = (type_probs_L @ self.params.vdw_radii[:9].float()) * radius_scale
@@ -409,10 +409,12 @@ class PhysicsEngine:
                 logger.warning("NaN detected in Soft Energy (handled by nan_to_num)")
                 e_soft = torch.nan_to_num(e_soft, nan=1000.0)
             
-            # 4. Hard Energy (Severe Clashes)
-            e_clash = torch.relu(sigma_ij - dist).pow(2).sum(dim=(1, 2))
+            # [v63.1 Spiked Ball] Linear Pauli Exclusion Force (The Spike)
+            # This provides a stable, non-stiff linear repulsion to drive expansion.
+            e_pauli = torch.relu(sigma_ij - dist).sum(dim=(1, 2)) 
             
-            return e_soft + nuclear_repulsion + e_suction, e_clash, self.current_alpha
+            # Final Energy Synthesis with Heavy Pauli Weight (100.0)
+            return e_soft + nuclear_repulsion + e_suction + 100.0 * e_pauli, e_pauli, self.current_alpha
 
     # --- SECTION 4: SCIENTIFIC METRICS (ICLR RIGOUR) ---
     def calculate_valency_loss(self, pos_L, x_L):
