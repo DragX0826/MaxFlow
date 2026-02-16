@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.1 MaxFlow (ICLR 2026 Golden Calculus Refined - Coordinated Entry)"
+VERSION = "v62.2 MaxFlow (ICLR 2026 Golden Calculus Refined - Time-Division Multiplexing)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -367,9 +367,14 @@ class PhysicsEngine:
             e_vdw = 10.0 * (inv_sc_dist.pow(6) - inv_sc_dist.pow(3))
             
             # [v61.3 Fix] Safe Nuclear Shield
-            # [v61.9 Fix] Hard Reality Shield: constant weight and safer cutoff
+            # [v62.2 Fix] Time-Division Multiplexing: Phase 1 (0-50%) Zero Repulsion
             r_safe = torch.clamp(dist, min=0.5) 
-            w_nuc = 1.0
+            if step_progress < 0.5:
+                w_nuc = 0.0 # Free Fall Phase
+            else:
+                # Phase 2: Restoration Phase. Ramp up repulsion to resolve clashes.
+                adj_progress = (step_progress - 0.5) / 0.5
+                w_nuc = 0.1 + 9.9 * (adj_progress ** 2)
             
             # Calculate repulsion but clamp the MAXIMUM energy value
             # [v61.9 Fix] Hard Shield: 0.6A cutoff
@@ -390,14 +395,14 @@ class PhysicsEngine:
             # 4. Hard Energy (Severe Clashes)
             e_clash = torch.relu(sigma_ij - dist).pow(2).sum(dim=(1, 2))
             
-            # [v62.1 Fix] Center-of-Mass Suction (Coordinated Entry)
+            # [v62.2 Fix] Gentle COM Suction
             # Pulls ligand as a whole ship towards the harbor center, preventing atom-wise collapse.
             # 1. Compute COM in aligned space (B, 1, 3)
             current_com = pos_L_aligned.mean(dim=1, keepdim=True)
             # 2. Compute distance from COM to center (which is 0 in aligned space) (B, 1)
             dist_com_to_center = torch.norm(current_com, dim=-1) # (B, 1)
             # 3. Apply suction force on the global translation
-            e_suction = 5.0 * dist_com_to_center.pow(2).squeeze() # (B,)
+            e_suction = 1.0 * dist_com_to_center.pow(2).squeeze() # Reduced weight
 
             # [v61.9 Fix] Staged Optimization
             if step_progress < 0.3:
@@ -2065,10 +2070,9 @@ class MaxFlowExperiment:
                 q_P_batched = q_P_sub.unsqueeze(0).repeat(B, 1)
                 x_P_batched = x_P_sub.unsqueeze(0).repeat(B, 1, 1)
                 
-                # [v60.5 Fix] Alpha Rescue Logic (Auto-Softening)
-                # If average energy exceeds 1000, soften the manifold to avoid crashes
-                # [v61.7 Fix] Strict Rescue Ban: 只在前 80% 的步驟允許救援，最後階段必須硬著陸
-                if batch_energy.mean() > 1000.0 and step < self.config.steps * 0.8:
+                # [v62.2 Fix] Delayed Alpha Rescue (Auto-Softening)
+                # 禁止在前 80% 的時間救援，確保前期保持柔軟結構以進入深口袋
+                if batch_energy.mean() > 1000.0 and step > self.config.steps * 0.8:
                     self.phys.current_alpha = max(self.phys.current_alpha, 2.0)
                     if step % 10 == 0:
                         logger.info(f"   🛡️  [Alpha-Rescue] High Energy ({batch_energy.mean():.1f}) detect, softening alpha=2.0")
