@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v60.4 MaxFlow (ICLR 2026 Golden Calculus Refined - Heterogeneous Miners)"
+VERSION = "v60.5 MaxFlow (ICLR 2026 Golden Calculus Refined - Safe-Guard Repulsion)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -365,11 +365,18 @@ class PhysicsEngine:
             inv_sc_dist = sigma_ij.pow(2) / (dist_sq + self.current_alpha * sigma_ij.pow(2) + 1e-6)
             e_vdw = 0.15 * (inv_sc_dist.pow(6) - inv_sc_dist.pow(3))
             
-            # [v60.3 Fix] Nuclear Shield (Pauli Exclusion)
-            # Use aggressive LJ-12 repulsion for short range to prevent atom collapse (Godzilla Carbon)
-            # Potential wall at r < 0.8 A forces absolute separation.
-            r_safe = dist + 1e-6
-            nuclear_repulsion = 1000.0 * torch.clamp(0.8 / r_safe, min=1.0).pow(12).sum(dim=(1,2))
+            # [v60.5 Fix] Safe Nuclear Shield
+            # Prevent NaN by clamping minimum distance for repulsion calculation
+            r_safe = torch.clamp(dist, min=0.6) # Clamp at 0.6A
+            
+            # Ramp up weight: 10.0 (start) -> 1000.0 (end)
+            w_nuc = 10.0 + 990.0 * (step_progress**2) 
+            
+            # Calculate repulsion but clamp the MAXIMUM energy value
+            raw_repulsion = (0.8 / r_safe).pow(12)
+            clamped_repulsion = torch.clamp(raw_repulsion, max=1e4) # Cap at 10,000 kcal/mol per atom pair
+            
+            nuclear_repulsion = w_nuc * clamped_repulsion.sum(dim=(1,2))
             
             # [v59.1 Fix] Attention-weighted Forces (Soft Distogram Simulation)
             attn_weights = F.softmax(-dist / 1.0, dim=-1) # (B, N, M)
@@ -1674,7 +1681,12 @@ class MaxFlowExperiment:
         miner_genes = torch.linspace(0.0, 1.0, B, device=device) # (B,)
         
         # 2. Noise Genes: Scale from 3.0A (Refinement) to 15.0A (Wide Search)
-        noise_scales = 3.0 + miner_genes.view(B, 1, 1) * 12.0 
+        # [v60.5 Fix] Tame the Macro-Noise for large systems to avoid initial instability
+        if N > 50:
+            noise_scales = 3.0 + miner_genes.view(B, 1, 1) * 4.0 # Cap at 7.0A
+            logger.info(f"   🌊 Tamed Macro-Noise active for large system (N={N}): 7.0A radius.")
+        else:
+            noise_scales = 3.0 + miner_genes.view(B, 1, 1) * 12.0 
         
         # 3. Geometry Genes: Factor from 2.0x (Hard) to 0.5x (Soft/Elastic)
         bond_stiffness_factors = 2.0 - 1.5 * miner_genes # Conservative(2.0), Radical(0.5)
@@ -1973,6 +1985,13 @@ class MaxFlowExperiment:
                 pos_P_batched = pos_P_sub.unsqueeze(0).repeat(B, 1, 1)
                 q_P_batched = q_P_sub.unsqueeze(0).repeat(B, 1)
                 x_P_batched = x_P_sub.unsqueeze(0).repeat(B, 1, 1)
+                
+                # [v60.5 Fix] Alpha Rescue Logic (Auto-Softening)
+                # If average energy exceeds 1000, soften the manifold to avoid crashes
+                if batch_energy.mean() > 1000.0:
+                    self.phys.current_alpha = max(self.phys.current_alpha, 2.0)
+                    if step % 10 == 0:
+                        logger.info(f"   🛡️  [Alpha-Rescue] High Energy ({batch_energy.mean():.1f}) detect, softening alpha=2.0")
                 
                 # Hierarchical Engine Call
                 e_soft, e_hard, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
