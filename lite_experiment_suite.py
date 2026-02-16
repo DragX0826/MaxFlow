@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v63.1 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Spiked Ball Strategy)"
+VERSION = "v63.2 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Inflationary Universe Strategy)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1951,18 +1951,26 @@ class MaxFlowExperiment:
                                 # [v60.3 Fix] Strict Valency Filter: Threshold tightened to 0.1 for zero-tolerance
                                 validly_mask = valency_err <= 0.1
                                 
-                                # If some miners are valid, force selection from valid ones by dropping others' score
+                            # [v63.2 Fix B] Inflationary Market Logic
+                            if step < 300:
+                                # Reward expansion (Spread) during early phase
+                                centroids_m = pos_L.mean(dim=1, keepdim=True)
+                                spread = (pos_L - centroids_m).norm(dim=-1).mean(dim=1) # (B,)
+                                market_scores = spread
+                                logger.info(f"   📈 [Inflation Market] Rewarding Expansion. Max Spread: {spread.max().item():.2f}")
+                            else:
+                                # Reward low energy and diversity later
                                 if validly_mask.any():
                                     market_base_scores = -batch_energy.clone()
                                     market_base_scores[~validly_mask] -= 1e6 # "Massive Fine" for illegal miners
                                 else:
                                     market_base_scores = -batch_energy
-                            
-                            centroids = pos_L.mean(dim=1) # (B, 3)
-                            # Diversity = Mean distance of ligand centroids to others in batch
-                            diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
-                            # CRPS Score = -Energy + 0.1 * Diversity (Selection from Base Score pool)
-                            market_scores = market_base_scores + 0.1 * diversity
+                                
+                                centroids = pos_L.mean(dim=1) # (B, 3)
+                                # Diversity = Mean distance of ligand centroids to others in batch
+                                diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
+                                # CRPS Score = -Energy + 0.1 * Diversity (Selection from Base Score pool)
+                                market_scores = market_base_scores + 0.1 * diversity
                             
                             _, top_indices = torch.topk(market_scores, k=4)
                             _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
@@ -2048,12 +2056,13 @@ class MaxFlowExperiment:
                 # Lower weights (100.0/10.0 instead of 500/50) to prevent "Hardening too fast"
                 # [v61.5 Fix] Liquid State (The Fluid Swarm): Zero stiffness for first 50%
                 # This allows perfect induced fit before freezing the conformation.
-                if progress < 0.5:
-                    w_bond_base = 0.0
+                # [v63.2 Fix A] Unchain the Bonds: Early zero-stiffness for expansion
+                if progress < 0.25:
+                    w_bond_base = 0.0 # Allow e_pauli to dominate without being pulled back
                 else:
-                    # Ramp up w_bond_base starting from 0.5
-                    adj_progress = (progress - 0.5) / 0.5
-                    w_bond_base = 1.0 + (100.0 - 1.0) * (adj_progress ** 1.5)
+                    # Ramp up w_bond_base quickly after 25% progress
+                    adj_progress = (progress - 0.25) / 0.75
+                    w_bond_base = 10.0 + 190.0 * (adj_progress ** 2)
                 
                 w_hard = 1.0 + (10.0 - 1.0) * (progress ** 1.5)
                 
@@ -2079,6 +2088,11 @@ class MaxFlowExperiment:
                 # Update Annealing based on Force Magnitude
                 f_mag = v_target.norm(dim=-1).mean().item()
                 self.phys.update_alpha(f_mag)
+                
+                # [v63.2 Fix C] Forced Cooling for final crystallization
+                if progress > 0.8:
+                    target_alpha_force = 0.01
+                    self.phys.current_alpha = self.phys.current_alpha * 0.9 + target_alpha_force * 0.1
                 
                 # The Golden Triangle Loss
                 # Pillar 1: Physics-Flow Matching (v58.6: Huber Loss for outlier robustness)
