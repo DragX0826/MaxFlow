@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v60.0 MaxFlow (ICLR 2026 Golden Calculus Refined - The Market-Flow)"
+VERSION = "v60.1 MaxFlow (ICLR 2026 Golden Calculus Refined - The Chemist's Constraint)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1830,8 +1830,9 @@ class MaxFlowExperiment:
                         mask[top_idx] = False
                         
                         if mask.any():
-                            logger.info(f"   🔄 [v55.3] Step 300 Re-noising: Kept {B - mask.sum()} survivors, re-noising {mask.sum()} others...")
-                            noise_new = torch.randn(mask.sum(), N, 3, device=device) * 2.0
+                            logger.info(f"   🔄 [v60.1] Step 300 Gentle Re-noising: Kept {B - mask.sum()} survivors, perturbing {mask.sum()} others...")
+                            # [v60.1 Fix] Reduce noise from 2.0 to 0.5 to preserve optimized structure
+                            noise_new = torch.randn(mask.sum(), N, 3, device=device) * 0.5
                             pos_L.data[mask] = p_center.view(1, 1, 3).repeat(mask.sum(), N, 1) + noise_new
                             
                             # [v59.2 Fix] Reset Patience to give re-noised samples a chance to resolve transients
@@ -1887,16 +1888,31 @@ class MaxFlowExperiment:
                         # [v60.0] The Market-Flow: Miner Survival Mechanism
                         # Competitive selection per 50 steps to solve pocket macro-entry problem
                         if step > 0:
+                            # [v60.1 Fix] Chemical Validity Filter (Constitution)
+                            # Penalize miners with high valency loss (Illegal Miners)
+                            with torch.no_grad():
+                                valency_err = self.phys.calculate_valency_loss(pos_L, x_L_final.view(B, N, -1)) # (B,)
+                                # Valid if error is low. 0.5 is a empirical threshold for "Reasonable structure"
+                                validly_mask = valency_err <= 0.5
+                                
+                                # If some miners are valid, force selection from valid ones by dropping others' score
+                                if validly_mask.any():
+                                    market_base_scores = -batch_energy.clone()
+                                    market_base_scores[~validly_mask] -= 1e6 # "Massive Fine" for illegal miners
+                                else:
+                                    market_base_scores = -batch_energy
+                            
                             centroids = pos_L.mean(dim=1) # (B, 3)
                             # Diversity = Mean distance of ligand centroids to others in batch
                             diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
-                            # CRPS Score = -Energy + 0.1 * Diversity
-                            market_scores = -batch_energy + 0.1 * diversity
+                            # CRPS Score = -Energy + 0.1 * Diversity (Selection from Base Score pool)
+                            market_scores = market_base_scores + 0.1 * diversity
                             
                             _, top_indices = torch.topk(market_scores, k=4)
                             _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
                             
-                            logger.info(f"   ⚖️  [Market-Flow] Culling {bottom_indices.tolist()} | Survivors: {top_indices.tolist()}")
+                            valid_count = validly_mask.sum().item()
+                            logger.info(f"   ⚖️  [Market-Flow] {valid_count}/{B} Valid | Culling {bottom_indices.tolist()} | Survivors: {top_indices.tolist()}")
                             
                             # Clone survivors + Mutate (Stochastic Noise)
                             for i in range(4):
