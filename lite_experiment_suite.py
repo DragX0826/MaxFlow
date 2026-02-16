@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v61.8 MaxFlow (ICLR 2026 Golden Calculus Refined - Forced Quenching)"
+VERSION = "v61.9 MaxFlow (ICLR 2026 Golden Calculus Refined - Hard Reality)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -247,8 +247,9 @@ class ForceFieldParameters:
     """
     def __init__(self):
         # Atomic Radii (Angstroms) for C, N, O, S, F, P, Cl, Br, I
-        # [v61.8 Fix] Aggressive Slimming (0.70x) for Rigid Receptor (Iron-Fist Quenching)
-        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device) * 0.70
+        # [v61.9 Fix] Hard Reality - Real VdW Radii
+        # Restore true physical dimensions to generate sufficient repulsion gradients
+        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device)
         # Epsilon (Well depth, kcal/mol)
         self.epsilon = torch.tensor([0.1, 0.1, 0.15, 0.2, 0.1, 0.2, 0.2, 0.2, 0.3], device=device)
         # [v57.0] Standard Valencies for C, N, O, S, F, P, Cl, Br, I
@@ -337,15 +338,13 @@ class PhysicsEngine:
             dist = torch.sqrt(dist_sq + 1e-9)
             
             # 2. Van der Waals Param Retrieval
-            # [v61.7 SOTA Logic] Variable Atomic Radii (The Ghost Protocol)
-            # 初期原子很小(0.5x)，允許鑽進深口袋；後期變大(0.9x)，產生正確的 VdW 接觸
-            radius_scale = 0.5 + 0.4 * step_progress # 0.5 -> 0.9
-            
+            # 2. Van der Waals Param Retrieval
+            # [v61.9 Fix] Real Physical Dimensions (No scaling)
             type_probs_L = x_L[..., :9]
-            radii_L = (type_probs_L @ self.params.vdw_radii[:9].float()) * radius_scale
+            radii_L = type_probs_L @ self.params.vdw_radii[:9].float()
             if x_P.dim() == 2: x_P = x_P.unsqueeze(0)
             prot_radii_map = torch.tensor([1.7, 1.55, 1.52, 1.8], device=pos_P.device, dtype=torch.float32)
-            radii_P = (x_P[..., :4] @ prot_radii_map) * radius_scale
+            radii_P = (x_P[..., :4] @ prot_radii_map)
             sigma_ij = radii_L.unsqueeze(-1) + radii_P.unsqueeze(1)
             
             # 3. Soft Energy (Intermolecular: vdW + Coulomb)
@@ -365,32 +364,16 @@ class PhysicsEngine:
             # [v61.3 Fix] Hyper-Attraction (10.0): "Vacuum Suction" into global minimum
             e_vdw = 10.0 * (inv_sc_dist.pow(6) - inv_sc_dist.pow(3))
             
-            # [v60.5 Fix] Safe Nuclear Shield
-            # Prevent NaN by clamping minimum distance for repulsion calculation
-            # [v61.3 Fix] Deep Penetration Clamp (0.4A)
-            r_safe = torch.clamp(dist, min=0.4) 
-            
-            # [v61.2 Fix] Softer Shield Start: Allow early-stage penetration
-            # [v61.8 Fix] Shield Shutdown (Attraction-Only Phase)
-            # Disable repulsion for first 50% of steps to allow magnetic sinking into pocket
-            if step_progress < 0.5:
-                w_nuc = 0.0
-            else:
-                # Exponential ramp-up in the second half
-                adjusted_progress = (step_progress - 0.5) / 0.5
-                w_nuc = 0.1 + 999.9 * (adjusted_progress**3)
+            # [v61.3 Fix] Safe Nuclear Shield
+            # [v61.9 Fix] Hard Reality Shield: constant weight and safer cutoff
+            r_safe = torch.clamp(dist, min=0.5) 
+            w_nuc = 1.0
             
             # Calculate repulsion but clamp the MAXIMUM energy value
-            # [v61.3 Fix] Deep Shield Cutoff (0.5A)
-            raw_repulsion = (0.5 / r_safe).pow(12)
-            clamped_repulsion = torch.clamp(raw_repulsion, max=1e4) # Cap at 10,000 kcal/mol per atom pair
-            
+            # [v61.9 Fix] Hard Shield: 0.6A cutoff
+            raw_repulsion = (0.6 / r_safe).pow(12)
+            clamped_repulsion = torch.clamp(raw_repulsion, max=1e5) 
             nuclear_repulsion = w_nuc * clamped_repulsion.sum(dim=(1,2))
-            
-            # [v61.4 Fix] Centripetal Suction (Solvent Exclusion Proxy)
-            # Pulls ligand atoms towards the joint pocket center to force occupancy
-            dist_to_center = torch.norm(pos_L_aligned, dim=-1) # (B, N)
-            e_suction = 0.5 * dist_to_center.pow(2).mean(dim=-1) # (B,)
             
             # [v59.1 Fix] Attention-weighted Forces (Soft Distogram Simulation)
             attn_weights = F.softmax(-dist / 1.0, dim=-1) # (B, N, M)
@@ -405,7 +388,13 @@ class PhysicsEngine:
             # 4. Hard Energy (Severe Clashes)
             e_clash = torch.relu(sigma_ij - dist).pow(2).sum(dim=(1, 2))
             
-            return e_soft + nuclear_repulsion + e_suction, e_clash, self.current_alpha
+            # [v61.9 Fix] Staged Optimization
+            if step_progress < 0.3:
+                # Phase 1: Explosion (Only repulsion/clashes to push atoms apart)
+                return nuclear_repulsion + e_clash * 10.0, e_clash, self.current_alpha
+            else:
+                # Phase 2: Binding (Enable attraction and final seating)
+                return e_soft + nuclear_repulsion + e_clash, e_clash, self.current_alpha
 
     # --- SECTION 4: SCIENTIFIC METRICS (ICLR RIGOUR) ---
     def calculate_valency_loss(self, pos_L, x_L):
