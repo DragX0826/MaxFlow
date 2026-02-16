@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v61.8.1 MaxFlow (ICLR 2026 Golden Calculus Refined - Seismic Rescue Hotfix)"
+VERSION = "v61.8.2 MaxFlow (ICLR 2026 Golden Calculus Refined - Seismic Rescue Hotfix II)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1958,40 +1958,41 @@ class MaxFlowExperiment:
                                 else:
                                     market_base_scores = -batch_energy
                             
-                            centroids = pos_L.mean(dim=1) # (B, 3)
-                            # [v61.8 Fix] Restore Diversity: Mean distance of ligand centroids to others in batch
-                            diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
-                        
-                        # [v61.8 Fix] The Market-Flow: Z-Score Normalization
-                        # Balance Energy and Diversity via normalized units
-                        with torch.no_grad():
-                            e_std = batch_energy.std() + 1e-6
-                            norm_energy = (batch_energy - batch_energy.mean()) / e_std
+                                centroids = pos_L.mean(dim=1) # (B, 3)
+                                # [v61.8 Fix] Restore Diversity: Mean distance of ligand centroids to others in batch
+                                diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
                             
-                            div_std = diversity.std() + 1e-6
-                            norm_diversity = (diversity - diversity.mean()) / div_std
+                                # [v61.8 Fix] The Market-Flow: Z-Score Normalization
+                                # Balance Energy and Diversity via normalized units
+                                e_std = batch_energy.std() + 1e-6
+                                norm_energy = (batch_energy - batch_energy.mean()) / e_std
+                                
+                                div_std = diversity.std() + 1e-6
+                                norm_diversity = (diversity - diversity.mean()) / div_std
+                                
+                                # Maximize Diversity(+), Minimize Energy(-) -> Maximize Score
+                                market_scores = -0.7 * norm_energy + 0.3 * norm_diversity
+                                
+                            _, top_indices = torch.topk(market_scores, k=4)
+                            _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
                             
-                            # Maximize Diversity(+), Minimize Energy(-) -> Maximize Score
-                            market_scores = -0.7 * norm_energy + 0.3 * norm_diversity
-                            
-                        _, top_indices = torch.topk(market_scores, k=4)
-                        _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
-                        
-                        # Clone & Mutate as above
-                        for i in range(4):
-                            src_idx = top_indices[i]
-                            dst_idx = bottom_indices[i]
-                            pos_L.data[dst_idx] = pos_L.data[src_idx] + torch.randn_like(pos_L[dst_idx]) * (0.5 * (1.0 - progress))
-                            q_L.data[dst_idx] = q_L.data[src_idx].detach().clone()
-                            x_L.data[dst_idx] = x_L.data[src_idx].detach().clone()
-                            noise_scales.data[dst_idx] = noise_scales.data[src_idx].clone()
-                            bond_factors.data[dst_idx] = bond_factors.data[src_idx].clone()
+                            logger.info(f"   ⚖️ [Market-Flow] {validly_mask.sum().item()}/{B} Valid | Diversifying populations...")
 
-                            # [v60.8] DNA Mutation (10% chance)
-                            if random.random() < 0.1:
-                                # Use scalar for mutation to avoid broadcast errors [RuntimeError Fix]
-                                mutation = 0.8 + 0.4 * random.random() # 0.8 ~ 1.2
-                                bond_factors.data[dst_idx] *= mutation
+                            # Clone survivors + Mutate (Stochastic Noise)
+                            for i in range(4):
+                                src_idx = top_indices[i]
+                                dst_idx = bottom_indices[i]
+                                # Clone coordinates, charges, and types
+                                pos_L.data[dst_idx] = pos_L.data[src_idx] + torch.randn_like(pos_L[dst_idx]) * (0.5 * (1.0 - progress))
+                                q_L.data[dst_idx] = q_L.data[src_idx].detach().clone()
+                                x_L.data[dst_idx] = x_L.data[src_idx].detach().clone()
+                                noise_scales.data[dst_idx] = noise_scales.data[src_idx].clone()
+                                bond_factors.data[dst_idx] = bond_factors.data[src_idx].clone()
+
+                                # [v60.8] DNA Mutation (10% chance)
+                                if random.random() < 0.1:
+                                    mutation = 0.8 + 0.4 * random.random() # 0.8 ~ 1.2
+                                    bond_factors.data[dst_idx] *= mutation
 
                 # Flow Field Prediction
                 # [v58.2 Hotfix] Disable CuDNN to allow double-backward through GRU backbone
