@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v60.7 MaxFlow (ICLR 2026 Golden Calculus Refined - Genetic Drift Fix)"
+VERSION = "v60.8 MaxFlow (ICLR 2026 Golden Calculus Refined - Indentation Fix)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1952,11 +1952,11 @@ class MaxFlowExperiment:
                                 noise_scales.data[dst_idx] = noise_scales.data[src_idx].clone()
                                 bond_factors.data[dst_idx] = bond_factors.data[src_idx].clone()
                                 
-                                 # [v60.7] DNA Mutation (10% chance)
-                                 if random.random() < 0.1:
-                                     # Use scalar for mutation to avoid broadcast errors [RuntimeError Fix]
-                                     mutation = 0.8 + 0.4 * random.random() # 0.8 ~ 1.2
-                                     bond_factors.data[dst_idx] *= mutation
+                                # [v60.8] DNA Mutation (10% chance)
+                                if random.random() < 0.1:
+                                    # Use scalar for mutation to avoid broadcast errors [RuntimeError Fix]
+                                    mutation = 0.8 + 0.4 * random.random() # 0.8 ~ 1.2
+                                    bond_factors.data[dst_idx] *= mutation
 
                 # Flow Field Prediction
                 # [v58.2 Hotfix] Disable CuDNN to allow double-backward through GRU backbone
