@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.6 MaxFlow (ICLR 2026 Golden Calculus Refined - The Nuclear Option)"
+VERSION = "v62.7 MaxFlow (ICLR 2026 Golden Calculus Refined - True North Strategy)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -751,7 +751,12 @@ class RealPDBFeaturizer:
             center = pos_P.mean(0)
             pos_P = pos_P - center
             pos_native = pos_native - center
-            pocket_center = torch.zeros(3, device=device) # Now the Protein Centroid
+            
+            # [v62.7 Fix A: True North Calibration]
+            # In Redocking tasks, the ground truth ligand's centroid is the REAL pocket center.
+            # Navigation to (0,0,0) (protein core) was the cause of previous structural collapses.
+            pocket_center = pos_native.mean(dim=0).detach() 
+            logger.info(f"   🧭 [True North] Pocket calibrated to Native Ligand centroid: {pocket_center.cpu().numpy()}")
             
             return pos_P, x_P, q_P, (pocket_center, pos_native)
         except Exception as e:
@@ -1722,10 +1727,12 @@ class MaxFlowExperiment:
 
         # [v61.0 Debug] Force Correct Pocket Center (Redocking Mode)
         # 如果開啟 Redocking，強制將搜索中心對準原位配體，並縮減初始噪聲
+        # [v62.7 Fix A: True North] p_center is already calibrated in the featurizer.
         if self.config.redocking:
             logger.info("   🚀 [Redocking] Pocket-Aware Mode active. Centering on ground truth.")
-            p_center = pos_native.mean(dim=0)
-            noise_scales = torch.ones_like(noise_scales) * 5.0 # Pocket-local search
+            # noise_scales = torch.ones_like(noise_scales) * 5.0 # Pocket-local search (v61.0)
+            # [v62.7] Even tighter start: noise scale 3.0 to ensure pocket entry
+            noise_scales = torch.ones_like(noise_scales) * 3.0
             
         # 3. 應用多樣化噪聲
         pos_L = (p_center.view(1, 1, 3) + torch.randn(B, N, 3, device=device) * noise_scales).detach()
@@ -2151,6 +2158,11 @@ class MaxFlowExperiment:
                 # Massive repulsion term to block internal collapse
                 loss_core = 1000.0 * torch.relu(1.2 - dist_matrix).mean()
 
+                # [v62.7 Fix B] Dark Energy Expansion: Ensure healthy Int-RMSD
+                # Current spread: mean distance from centroid
+                current_spread = (pos_L_reshaped - pos_L_reshaped.mean(dim=1, keepdim=True)).norm(dim=-1).mean(dim=1) # (B,)
+                loss_dark_energy = torch.relu(1.5 - current_spread).pow(2).mean()
+
                 # [v62.1 Fix A] Radius of Gyration (Rg) Penalty: Compactness
                 # [v62.3 Fix A] Delayed Compactness: Only active after 500 steps
                 center_of_mass = pos_L_reshaped.mean(dim=1, keepdim=True)
@@ -2183,11 +2195,11 @@ class MaxFlowExperiment:
                 # If nearest neighbor < 1.4A,施加推力把它推回 1.5A
                 loss_expansion = torch.relu(1.5 - min_neighbor_dist).pow(2).mean()
 
-                # Unified Formula: FM + RJF + Semantic + Cohesion + Compactness + Anchor + Inflation + Expansion + Collapse + Core
+                # Unified Formula: FM + RJF + Semantic + Cohesion + Compactness + Anchor + Inflation + Expansion + Collapse + Core + DarkEnergy
                 loss = (loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 
                         5.0 * loss_cohesion + 2.0 * loss_compact.mean() + 
                         loss_anchor + loss_inflation + 20.0 * loss_expansion +
-                        50.0 * loss_collapse + loss_core)
+                        50.0 * loss_collapse + loss_core + 100.0 * loss_dark_energy)
 
                 # [v59.5 Fix] NaN Sentry inside the loop
                 # Check for NaNs immediately after backward
