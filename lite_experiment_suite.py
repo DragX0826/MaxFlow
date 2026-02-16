@@ -1,5 +1,6 @@
 import os
 import sys
+import math
 import argparse
 import subprocess
 import time
@@ -24,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v61.7 MaxFlow (ICLR 2026 Golden Calculus Refined - The Ghost Protocol)"
+VERSION = "v61.8 MaxFlow (ICLR 2026 Golden Calculus Refined - Forced Quenching)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -246,8 +247,8 @@ class ForceFieldParameters:
     """
     def __init__(self):
         # Atomic Radii (Angstroms) for C, N, O, S, F, P, Cl, Br, I
-        # [v61.6 Fix] Extreme Atomic Shrinkage (0.80x) to allow high-density biological packing
-        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device) * 0.80
+        # [v61.8 Fix] Aggressive Slimming (0.70x) for Rigid Receptor (Iron-Fist Quenching)
+        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device) * 0.70
         # Epsilon (Well depth, kcal/mol)
         self.epsilon = torch.tensor([0.1, 0.1, 0.15, 0.2, 0.1, 0.2, 0.2, 0.2, 0.3], device=device)
         # [v57.0] Standard Valencies for C, N, O, S, F, P, Cl, Br, I
@@ -286,26 +287,16 @@ class PhysicsEngine:
         self.current_alpha = self.params.softness_start
         self.max_force_ema = 1.0
 
-    def update_alpha(self, force_magnitude):
+    def update_alpha(self, step: int, total_steps: int):
         """
-        [v58.1] Adapt alpha based on gradient magnitude.
-        High force = Stay soft to resolve. Low force = Harden for precision.
+        [v61.8 Fix] Forced Quenching: Absolute Manifold Hardening.
+        Implement Forced Cosine Annealing schedule regardless of instantaneous forces.
         """
-        with torch.no_grad():
-            self.max_force_ema = 0.99 * self.max_force_ema + 0.01 * force_magnitude
-            norm_force = force_magnitude / (self.max_force_ema + 1e-8)
-            norm_force = torch.clamp(torch.tensor(norm_force), 0.0, 1.0)
-            # sigmoid(5 * (x - 0.5)) -> 0.5 at midpoint. 
-            # If norm_force is small, decay is small -> hardening speeds up? 
-            # Wait, high force should SLOW DOWN hardening.
-            # sigmoid(5 * (0.5 - norm_force)) -> high force (norm=1) -> sigmoid(-2.5) -> small decay.
-            # low force (norm=0) -> sigmoid(2.5) -> high decay -> hardening accelerates.
-            # [v61.4 Fix] Alpha Persistence: slower hardening for deep entry
-            # Shift threshold from 0.5 to 0.2 to delay hardening during high-force resolve
-            decay = self.hardening_rate * torch.sigmoid(5.0 * (0.2 - norm_force))
-            self.current_alpha = self.current_alpha * (1.0 - decay.item())
-            # [v61.4 Fix] Maintain alpha >= 0.5 to ensure persistent soft-manifold penetration
-            self.current_alpha = max(self.current_alpha, 0.5)
+        progress = step / total_steps
+        alpha_start = 5.0
+        alpha_end = 0.01
+        # Hard Cosine Schedule
+        self.current_alpha = alpha_end + 0.5 * (alpha_start - alpha_end) * (1 + math.cos(math.pi * progress))
 
     def soft_clip_vector(self, v, max_norm=10.0):
         """
@@ -380,13 +371,13 @@ class PhysicsEngine:
             r_safe = torch.clamp(dist, min=0.4) 
             
             # [v61.2 Fix] Softer Shield Start: Allow early-stage penetration
-            # [v61.5 Fix] Nuclear Ghosting (Quantum Tunneling)
-            # Disable repulsion for first 30% of steps to allow pocket infiltration
-            if step_progress < 0.3:
+            # [v61.8 Fix] Shield Shutdown (Attraction-Only Phase)
+            # Disable repulsion for first 50% of steps to allow magnetic sinking into pocket
+            if step_progress < 0.5:
                 w_nuc = 0.0
             else:
-                adjusted_progress = (step_progress - 0.3) / 0.7
-                # Ramp up weight: 0.1 (original start) -> 1000.0 (end) with cubic ramp
+                # Exponential ramp-up in the second half
+                adjusted_progress = (step_progress - 0.5) / 0.5
                 w_nuc = 0.1 + 999.9 * (adjusted_progress**3)
             
             # Calculate repulsion but clamp the MAXIMUM energy value
@@ -2075,9 +2066,8 @@ class MaxFlowExperiment:
                 # [v59.2 Fix] Use Direction-Preserving Soft-Clip instead of Hard Clamp
                 v_target = self.phys.soft_clip_vector(force_total.detach(), max_norm=20.0)
                 
-                # Update Annealing based on Force Magnitude
-                f_mag = v_target.norm(dim=-1).mean().item()
-                self.phys.update_alpha(f_mag)
+                # Update Annealing based on Step Schedule (v61.8 Forced Quenching)
+                self.phys.update_alpha(step, self.config.steps)
                 
                 # The Golden Triangle Loss
                 # Pillar 1: Physics-Flow Matching (v58.6: Huber Loss for outlier robustness)
