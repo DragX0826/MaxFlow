@@ -1,6 +1,5 @@
 import os
 import sys
-import math
 import argparse
 import subprocess
 import time
@@ -25,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.4 MaxFlow (ICLR 2026 Golden Calculus Refined - True Ghost Mode)"
+VERSION = "v62.6 MaxFlow (ICLR 2026 Golden Calculus Refined - The Great Comparison)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -247,9 +246,8 @@ class ForceFieldParameters:
     """
     def __init__(self):
         # Atomic Radii (Angstroms) for C, N, O, S, F, P, Cl, Br, I
-        # [v61.9 Fix] Hard Reality - Real VdW Radii
-        # Restore true physical dimensions to generate sufficient repulsion gradients
-        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device)
+        # [v61.6 Fix] Extreme Atomic Shrinkage (0.80x) to allow high-density biological packing
+        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device) * 0.80
         # Epsilon (Well depth, kcal/mol)
         self.epsilon = torch.tensor([0.1, 0.1, 0.15, 0.2, 0.1, 0.2, 0.2, 0.2, 0.3], device=device)
         # [v57.0] Standard Valencies for C, N, O, S, F, P, Cl, Br, I
@@ -266,9 +264,12 @@ class ForceFieldParameters:
         self.softness_start = 5.0
         self.softness_end = 0.0
 
+        # [v62.5 Fix] Shared Protein Radii Map
+        self.prot_radii_map = torch.tensor([1.7, 1.55, 1.52, 1.8], dtype=torch.float32)
+
 class PhysicsEngine:
     """
-    Differentiable Molecular Mechanics Engine (v21.0).
+    Differentiable Molecular Mechanics Engine (v62.5).
     Supports:
     - Electrostatics (Coulomb with soft-core)
     - Van der Waals (Lennard-Jones 12-6 with soft-core)
@@ -288,28 +289,55 @@ class PhysicsEngine:
         self.current_alpha = self.params.softness_start
         self.max_force_ema = 1.0
 
-    def update_alpha(self, step: int, total_steps: int):
+    def update_alpha(self, force_magnitude):
         """
-        [v61.8 Fix] Forced Quenching: Absolute Manifold Hardening.
-        Implement Forced Cosine Annealing schedule regardless of instantaneous forces.
+        [v58.1] Adapt alpha based on gradient magnitude.
+        High force = Stay soft to resolve. Low force = Harden for precision.
         """
-        progress = step / total_steps
-        alpha_start = 5.0
-        alpha_end = 0.01
-        # Hard Cosine Schedule
-        self.current_alpha = alpha_end + 0.5 * (alpha_start - alpha_end) * (1 + math.cos(math.pi * progress))
+        with torch.no_grad():
+            self.max_force_ema = 0.99 * self.max_force_ema + 0.01 * force_magnitude
+            norm_force = force_magnitude / (self.max_force_ema + 1e-8)
+            norm_force = torch.clamp(torch.tensor(norm_force), 0.0, 1.0)
+            # sigmoid(5 * (x - 0.5)) -> 0.5 at midpoint. 
+            # If norm_force is small, decay is small -> hardening speeds up? 
+            # Wait, high force should SLOW DOWN hardening.
+            # sigmoid(5 * (0.5 - norm_force)) -> high force (norm=1) -> sigmoid(-2.5) -> small decay.
+            # low force (norm=0) -> sigmoid(2.5) -> high decay -> hardening accelerates.
+            # [v61.4 Fix] Alpha Persistence: slower hardening for deep entry
+            # Shift threshold from 0.5 to 0.2 to delay hardening during high-force resolve
+            decay = self.hardening_rate * torch.sigmoid(5.0 * (0.2 - norm_force))
+            self.current_alpha = self.current_alpha * (1.0 - decay.item())
+            # [v61.4 Fix] Maintain alpha >= 0.5 to ensure persistent soft-manifold penetration
+            self.current_alpha = max(self.current_alpha, 0.5)
 
     def soft_clip_vector(self, v, max_norm=10.0):
         """
         [v59.2] Direction-preserving soft clip.
         Solving the 'Exploding Gradient' problem during stiffness shocks.
         """
-        norm = v.norm(dim=-1, keepdim=True)
-        scale = (max_norm * torch.tanh(norm / max_norm)) / (norm + 1e-6)
+        norm = torch.norm(v, dim=-1, keepdim=True)
+        scale = torch.tanh(norm / max_norm) * max_norm / (norm + 1e-8)
         return v * scale
 
-    def compute_energy(self, pos_L, pos_P, q_L, q_P, x_L, x_P, step_progress=0.0):
+    def compute_gaussian_energy(self, x_L, x_P, sigma=1.0):
         """
+        [SOTA] Gaussian Smoothed Potential (Score-Based Physics)
+        建立一個光滑的能量漏斗，沒有奇異點(Singularity)。
+        """
+        # 計算距離矩陣 (B, N_L, N_P)
+        dists = torch.cdist(x_L, x_P)
+        
+        # 高斯吸引勢能: E = -Sum( exp( -r^2 / 2*sigma^2 ) )
+        # 這本質上是在計算配體與蛋白的「體積重疊度」，但用高斯模糊過了
+        gauss_term = torch.exp(-dists.pow(2) / (2 * sigma**2))
+        
+        # 負號代表吸引 (重疊越多能量越低)
+        # 乘上一個係數讓梯度足夠大
+        return -10.0 * gauss_term.sum(dim=(1, 2))
+
+    def compute_energy(self, pos_L, pos_P, q_L, q_P, x_L, x_P, step_progress=0.0, clan_params=None):
+        """
+        v62.6: The Great Comparison (Clan-Aware Hybrid Schedule)
         [v59.5] FP32 Sanctuary. 
         Forces physics calculation in float32 to prevent NaN in gradients under FP16.
         """
@@ -322,106 +350,72 @@ class PhysicsEngine:
             q_P = q_P.float()
             x_L = x_L.float()
             x_P = x_P.float()
+            B = pos_L.size(0)
 
             # [v59.3 Fix] Joint Centric Alignment
             combined_pos = torch.cat([pos_L, pos_P], dim=1) 
             joint_com = combined_pos.mean(dim=1, keepdim=True) 
             pos_L_aligned = pos_L - joint_com
             pos_P_aligned = pos_P - joint_com
+
+            # [v62.6] Clan Parameter Unpacking
+            # clan_params: (B, 3) -> [transition_point, sigma_start, radius_start]
+            if clan_params is None:
+                clan_params = torch.tensor([[0.5, 5.0, 0.6]], device=pos_L.device).repeat(B, 1)
             
-            # [v59.6 Fix] Stable Distance calculation for Gradient Stability
-            # torch.cdist has undefined gradients at dist=0, which causes Step 0 NaNs.
-            # Explicit squared distance + safe sqrt(eps) ensures finite gradients.
-            # (B, N, 1, 3) - (B, 1, M, 3) -> (B, N, M, 3)
-            diff = pos_L_aligned.unsqueeze(2) - pos_P_aligned.unsqueeze(1)
-            dist_sq = diff.pow(2).sum(dim=-1)
-            dist = torch.sqrt(dist_sq + 1e-9)
+            t_point = clan_params[:, 0]
+            sig_start = clan_params[:, 1]
+            rad_start = clan_params[:, 2]
+
+            # Determine mask: (B,)
+            in_phase1 = (step_progress < t_point).float()
+            in_phase2 = 1.0 - in_phase1
+
+            # -----------------------------------------------------------
+            # Phase 1: 高斯平滑 (Gaussian Smoothing)
+            # -----------------------------------------------------------
+            # Normalize progress within phase 1: from 0.0 to 1.0
+            p1_progress = torch.clamp(step_progress / (t_point + 1e-6), 0.0, 1.0)
+            current_sigma = sig_start - (sig_start - 1.0) * p1_progress
             
-            # 2. Van der Waals Param Retrieval
-            # [Smart Method 3] Radius Annealing Schedule (v62.3)
-            # [v62.3 Fix] Constant Golden Radius (0.8)
-            # Dark Matter Mode handles barrier crossing, so we use the optimal seating volume throughout.
-            radius_scale = 0.8
+            e_gauss = self.compute_gaussian_energy(pos_L_aligned, pos_P_aligned, sigma=current_sigma.view(B, 1, 1))
+            center_dist = torch.norm(pos_L_aligned.mean(dim=1), dim=-1)
+            e_suction = 1.0 * center_dist.pow(2)
+
+            # -----------------------------------------------------------
+            # Phase 2: 幽靈顯形 (Ghost Materialization)
+            # -----------------------------------------------------------
+            # Normalize progress within phase 2: from 0.0 to 1.0
+            p2_progress = torch.clamp((step_progress - t_point) / (1.0 - t_point + 1e-6), 0.0, 1.0)
+            radius_scale = rad_start + (0.9 - rad_start) * p2_progress
             
             type_probs_L = x_L[..., :9]
-            radii_L = (type_probs_L @ self.params.vdw_radii[:9].float()) * radius_scale
+            radii_L = (type_probs_L @ self.params.vdw_radii[:9].float()) * radius_scale.view(B, 1)
+            
             if x_P.dim() == 2: x_P = x_P.unsqueeze(0)
-            prot_radii_map = torch.tensor([1.7, 1.55, 1.52, 1.8], device=pos_P.device, dtype=torch.float32)
-            radii_P = (x_P[..., :4] @ prot_radii_map) * radius_scale
+            prot_radii_map = self.params.prot_radii_map.to(pos_P.device)
+            radii_P = (x_P[..., :4] @ prot_radii_map) * radius_scale.view(B, 1)
             sigma_ij = radii_L.unsqueeze(-1) + radii_P.unsqueeze(1)
             
-            # 3. Soft Energy (Intermolecular: vdW + Coulomb)
-            dielectric = 4.0 
-            soft_dist_sq = dist_sq + self.current_alpha * sigma_ij.pow(2)
+            dists = torch.cdist(pos_L_aligned, pos_P_aligned)
+            inv_sc_dist = sigma_ij / (dists + 1e-6)
             
-            # Coulomb
-            if q_L.dim() == 2: # (Batch, N)
-                 q_L_exp = q_L.unsqueeze(2) # (B, N, 1)
-                 q_P_exp = q_P.view(q_P.size(0) if q_P.dim() > 1 else 1, 1, -1)
-                 e_elec = (332.06 * q_L_exp * q_P_exp) / (dielectric * torch.sqrt(soft_dist_sq))
-            else: # (N,)
-                 e_elec = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * torch.sqrt(soft_dist_sq))
+            e_vdw = 1.0 * (inv_sc_dist.pow(12) - 2.0 * inv_sc_dist.pow(6))
+            e_soft_p2 = e_vdw.sum(dim=(1, 2))
             
-            # vdW
-            inv_sc_dist = sigma_ij.pow(2) / (dist_sq + self.current_alpha * sigma_ij.pow(2) + 1e-6)
-            # [v61.3 Fix] Hyper-Attraction (10.0): "Vacuum Suction" into global minimum
-            e_vdw = 10.0 * (inv_sc_dist.pow(6) - inv_sc_dist.pow(3))
+            # Nuclear Shield
+            r_safe = torch.clamp(dists, min=0.5)
+            w_nuc = 0.1 * p2_progress 
+            nuclear_repulsion = w_nuc * (0.6 / r_safe).pow(12).sum(dim=(1, 2))
             
-            # [v61.3 Fix] Safe Nuclear Shield
-            # [v62.2 Fix] Time-Division Multiplexing: Phase 1 (0-50%) Zero Repulsion
-            r_safe = torch.clamp(dist, min=0.5) 
-            if step_progress < 0.5:
-                w_nuc = 0.0 # Free Fall Phase
-            else:
-                # Phase 2: Restoration Phase. Ramp up repulsion to resolve clashes.
-                adj_progress = (step_progress - 0.5) / 0.5
-                w_nuc = 0.1 + 9.9 * (adj_progress ** 2)
-            
-            # Calculate repulsion but clamp the MAXIMUM energy value
-            # [v61.9 Fix] Hard Shield: 0.6A cutoff
-            raw_repulsion = (0.6 / r_safe).pow(12)
-            clamped_repulsion = torch.clamp(raw_repulsion, max=1e5) 
-            nuclear_repulsion = w_nuc * clamped_repulsion.sum(dim=(1,2))
-            
-            # [v59.1 Fix] Attention-weighted Forces (Soft Distogram Simulation)
-            attn_weights = F.softmax(-dist / 1.0, dim=-1) # (B, N, M)
-            # [v62.3 Fix] Dark Matter Mode: Phase 1 (0-50%)
-            # Clamp soft energy to purely attractive values (max=0.0). 
-            # This allows the ligand to bypass the hidden steric resistance in the VdW potential.
-            e_inter = (e_elec + e_vdw) * attn_weights
-            e_soft_raw = e_inter.sum(dim=(1, 2))
-            
-            if step_progress < 0.5:
-                e_soft = torch.clamp(e_soft_raw, max=0.0) # Absolute Zero Repulsion
-            else:
-                e_soft = e_soft_raw
+            e_clash = (dists < sigma_ij * 0.6).float().sum(dim=(1, 2))
+            current_alpha = 5.0 * (1.0 - p2_progress) + 0.1
 
-            # [v59.5 Fix] NaN Sentry
-            if torch.isnan(e_soft).any():
-                logger.warning("NaN detected in Soft Energy (handled by nan_to_num)")
-                e_soft = torch.nan_to_num(e_soft, nan=1000.0)
-            
-            # 4. Hard Energy (Severe Clashes)
-            e_clash = torch.relu(sigma_ij - dist).pow(2).sum(dim=(1, 2))
-            
-            # [v62.4 Fix] Tractor Beam Suction
-            # Pulls ligand as a whole ship towards the harbor center, preventing atom-wise collapse.
-            # 1. Compute COM in aligned space (B, 1, 3)
-            current_com = pos_L_aligned.mean(dim=1, keepdim=True)
-            # 2. Compute distance from COM to center (which is 0 in aligned space) (B, 1)
-            dist_com_to_center = torch.norm(current_com, dim=-1) # (B, 1)
-            # 3. Apply suction force on the global translation
-            e_suction = 5.0 * dist_com_to_center.pow(2).squeeze() # Tractor Beam
-
-            # [v62.4 Fix] True Ghost Mode Optimization
-            if step_progress < 0.5:
-                # Phase 1: Ghost Mode (Frictionless Ingress)
-                # Absolute zero repulsion (Soft-Clamped + No Nuclear + No Clash)
-                return e_soft + e_suction, e_clash, self.current_alpha
-            else:
-                # Phase 2: Materialization (Seating & Optimization)
-                # Restore full physical integrity
-                return e_soft + nuclear_repulsion + e_clash + e_suction, e_clash, self.current_alpha
+            # -----------------------------------------------------------
+            # Final Merge
+            # -----------------------------------------------------------
+            e_total = in_phase1 * (e_gauss + e_suction) + in_phase2 * (e_soft_p2 + nuclear_repulsion)
+            return e_total, e_clash * in_phase2, in_phase1 * 5.0 + in_phase2 * current_alpha
 
     # --- SECTION 4: SCIENTIFIC METRICS (ICLR RIGOUR) ---
     def calculate_valency_loss(self, pos_L, x_L):
@@ -1683,53 +1677,6 @@ class MaxFlowExperiment:
         except Exception as e:
             logger.warning(f"⚠️ Failed to export PyMOL script: {e}")
 
-    def detect_pockets_geometry(self, pos_P, top_k=3):
-        """
-        [Smart Method 1] Geometric Vision (v62.0)
-        計算蛋白表面的凹陷度 (Concavity)，以此作為先驗概率。
-        不依賴 Ground Truth，純幾何計算。
-        """
-        # 1. 計算每個蛋白原子的「鄰居數量」
-        # 在 10A 半徑內，鄰居越多，代表被包圍得越緊 => 越凹
-        # 使用分批計算以防 OOM
-        M = pos_P.size(0)
-        neighbor_counts = torch.zeros(M, device=pos_P.device)
-        batch_size = 1000
-        for i in range(0, M, batch_size):
-            end = min(i + batch_size, M)
-            dist_batch = torch.cdist(pos_P[i:end], pos_P) # (batch, M)
-            neighbor_counts[i:end] = (dist_batch < 10.0).sum(dim=1).float()
-        
-        # 2. 歸一化並轉化為概率
-        # 我們只對「非常凹」的地方感興趣 (Top 10%)
-        threshold = torch.quantile(neighbor_counts, 0.9)
-        pocket_mask = neighbor_counts > threshold
-        
-        # 3. 採樣候選中心
-        candidate_indices = torch.nonzero(pocket_mask).squeeze()
-        if candidate_indices.numel() == 0:
-            return pos_P.mean(dim=0, keepdim=True) # Fallback to COM
-            
-        # 選出鄰居最多的 top_k 個點，且確保它們之間有一定的距離 (防止擠在一起)
-        selected_pockets = []
-        sorted_indices = torch.argsort(neighbor_counts, descending=True)
-        
-        for idx in sorted_indices:
-            candidate = pos_P[idx]
-            if len(selected_pockets) == 0:
-                selected_pockets.append(candidate)
-            else:
-                # 距離現有中心至少 15A
-                dists = torch.norm(torch.stack(selected_pockets) - candidate, dim=-1)
-                if (dists > 15.0).all():
-                    selected_pockets.append(candidate)
-            
-            if len(selected_pockets) >= top_k:
-                break
-                
-        logger.info(f"   🧠 [Smart-Prior] Detected {len(selected_pockets)} geometric pockets based on concavity.")
-        return torch.stack(selected_pockets)
-
     def run(self):
         logger.info(f"🚀 Starting Experiment {VERSION} (TSO-Agentic Mode) on {self.config.target_name}...")
         convergence_history = [] 
@@ -1758,6 +1705,20 @@ class MaxFlowExperiment:
         x_L = nn.Parameter(torch.randn(B, N, D, device=device)) 
         q_L = nn.Parameter(torch.randn(B, N, device=device))    
         
+        # [v62.6] Clan Initialization: Five Schedules for Comparison
+        # Parameters: [transition_point, sigma_start, radius_start]
+        clan_configs = torch.tensor([
+            [0.7, 10.0, 0.4], # C1: Smooth Tunnel (Long Gaussian)
+            [0.3, 3.0, 0.7],  # C2: Precision Snapper (Short Gaussian)
+            [0.5, 5.0, 0.5],  # C3: Ghost Specialist (Balanced)
+            [0.6, 7.0, 0.6],  # C4: Liquid Drifter (Fluid)
+            [0.1, 2.0, 0.8]   # C5: Hard Grounding (Early Physical)
+        ], device=device)
+        
+        # Segment batch into 5 clans
+        clan_idx = (torch.arange(B, device=device) // (max(1, B // 5))) % 5
+        clan_params = clan_configs[clan_idx] # (B, 3)
+
         # Ligand Positions (Gaussian Cloud around Pocket)
         # [v60.6 SOTA] Heterogeneous Miner Genesis (The Darwinian Swarm)
         # 0.0 = 保守派 (精修工), 1.0 = 激進派 (探險家)
@@ -1767,26 +1728,19 @@ class MaxFlowExperiment:
         # 激進派搜索範圍極大 (25.0A)，保守派只在中心附近 (2.0A)
         noise_scales = 2.0 + miner_genes.view(B, 1, 1) * 23.0 # Range: [2.0, 25.0]
         
-        # [v62.1 Fix] Rigidify Skeleton (Coordinated Entry)
-        # Since we use COM suction, we can keep the ligand rigid to explore as a whole.
-        # Range: [1.0, 2.0] (Solid to Extra-Rigid)
-        bond_factors = 1.0 + 1.0 * miner_genes
+        # 2. 幾何剛性基因 (Geometric Stiffness)
+        # [v61.7 Parameter] Liquid/Flexible Skeleton
+        bond_factors = 1.0 - 0.9 * miner_genes # Range: [1.0, 0.1]
 
-        # [v62.0 SOTA] Curvature-Guided Cascade Initialization
-        # 如果不是 Redocking，使用幾何先驗搜索口袋中心
-        if not self.config.redocking:
-            pocket_centers = self.detect_pockets_geometry(pos_P, top_k=3) # (K, 3)
-            K = pocket_centers.size(0)
-            # 將 Batch 分配給不同的中心
-            p_centers_batch = pocket_centers[torch.arange(B, device=device) % K] # (B, 3)
-            noise_scales = 2.0 + miner_genes.view(B, 1, 1) * 10.0 # 縮小搜索半徑 (2A to 12A)
-        else:
+        # [v61.0 Debug] Force Correct Pocket Center (Redocking Mode)
+        # 如果開啟 Redocking，強制將搜索中心對準原位配體，並縮減初始噪聲
+        if self.config.redocking:
             logger.info("   🚀 [Redocking] Pocket-Aware Mode active. Centering on ground truth.")
-            p_centers_batch = pos_native.mean(dim=0, keepdim=True).repeat(B, 1) # (B, 3)
+            p_center = pos_native.mean(dim=0)
             noise_scales = torch.ones_like(noise_scales) * 5.0 # Pocket-local search
             
         # 3. 應用多樣化噪聲
-        pos_L = (p_centers_batch.unsqueeze(1) + torch.randn(B, N, 3, device=device) * noise_scales).detach()
+        pos_L = (p_center.view(1, 1, 3) + torch.randn(B, N, 3, device=device) * noise_scales).detach()
         pos_L.requires_grad = True
         q_L.requires_grad = True
         
@@ -2027,7 +1981,9 @@ class MaxFlowExperiment:
                             _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
                             
                             valid_count = validly_mask.sum().item()
-                            logger.info(f"   ⚖️  [Market-Flow] {valid_count}/{B} Valid | Culling {bottom_indices.tolist()} | Survivors: {top_indices.tolist()}")
+                            # [v62.6] Log the winning clan proxy (Transition point * 10)
+                            winning_clan = (clan_params[top_indices[0], 0] * 10).long().item()
+                            logger.info(f"   ⚖️  [Market-Flow] {valid_count}/{B} Valid | Winner Clan: {winning_clan} | Survivors: {top_indices.tolist()}")
                             
                             # Clone survivors + Mutate (Stochastic Noise)
                             for i in range(4):
@@ -2037,6 +1993,7 @@ class MaxFlowExperiment:
                                 pos_L.data[dst_idx] = pos_L.data[src_idx] + torch.randn_like(pos_L[dst_idx]) * (0.5 * (1.0 - progress))
                                 q_L.data[dst_idx] = q_L.data[src_idx].detach().clone()
                                 x_L.data[dst_idx] = x_L.data[src_idx].detach().clone()
+                                clan_params[dst_idx] = clan_params[src_idx].clone() # [v62.6] Propagate Clan Genes
                                 
                                 # [v60.6] The Viral Update (Parameter Infection)
                                 # 這是演化算法的核心：強者的基因會統治種群
@@ -2081,9 +2038,10 @@ class MaxFlowExperiment:
                 q_P_batched = q_P_sub.unsqueeze(0).repeat(B, 1)
                 x_P_batched = x_P_sub.unsqueeze(0).repeat(B, 1, 1)
                 
-                # [v62.2 Fix] Delayed Alpha Rescue (Auto-Softening)
-                # 禁止在前 80% 的時間救援，確保前期保持柔軟結構以進入深口袋
-                if batch_energy.mean() > 1000.0 and step > self.config.steps * 0.8:
+                # [v60.5 Fix] Alpha Rescue Logic (Auto-Softening)
+                # If average energy exceeds 1000, soften the manifold to avoid crashes
+                # [v61.7 Fix] Strict Rescue Ban: 只在前 80% 的步驟允許救援，最後階段必須硬著陸
+                if batch_energy.mean() > 1000.0 and step < self.config.steps * 0.8:
                     self.phys.current_alpha = max(self.phys.current_alpha, 2.0)
                     if step % 10 == 0:
                         logger.info(f"   🛡️  [Alpha-Rescue] High Energy ({batch_energy.mean():.1f}) detect, softening alpha=2.0")
@@ -2096,9 +2054,9 @@ class MaxFlowExperiment:
                         logger.info("   💎 [The Ghost Protocol] Terminal Polishing: Alpha=0.1, Noise=0")
                 
                 # Hierarchical Engine Call
-                e_soft, e_hard, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
-                                                               x_L_for_physics, x_P_batched, progress)
-                
+                e_soft, e_clash, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
+                                                                 x_L, x_P_batched, step_progress=step / self.config.steps,
+                                                                 clan_params=clan_params)
                 # Internal Geometry (Bonds & Angles)
                 e_bond = self.phys.calculate_internal_geometry_score(pos_L_reshaped) 
                 
@@ -2134,8 +2092,9 @@ class MaxFlowExperiment:
                 # [v59.2 Fix] Use Direction-Preserving Soft-Clip instead of Hard Clamp
                 v_target = self.phys.soft_clip_vector(force_total.detach(), max_norm=20.0)
                 
-                # Update Annealing based on Step Schedule (v61.8 Forced Quenching)
-                self.phys.update_alpha(step, self.config.steps)
+                # Update Annealing based on Force Magnitude
+                f_mag = v_target.norm(dim=-1).mean().item()
+                self.phys.update_alpha(f_mag)
                 
                 # The Golden Triangle Loss
                 # Pillar 1: Physics-Flow Matching (v58.6: Huber Loss for outlier robustness)
