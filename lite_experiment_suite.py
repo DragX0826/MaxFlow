@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v59.7 MaxFlow (ICLR 2026 Golden Calculus Refined - Langevin Dynamics)"
+VERSION = "v60.0 MaxFlow (ICLR 2026 Golden Calculus Refined - The Market-Flow)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -300,7 +300,8 @@ class PhysicsEngine:
             # low force (norm=0) -> sigmoid(2.5) -> high decay -> hardening accelerates.
             decay = self.hardening_rate * torch.sigmoid(5.0 * (0.5 - norm_force))
             self.current_alpha = self.current_alpha * (1.0 - decay.item())
-            self.current_alpha = max(self.current_alpha, self.params.softness_end)
+            # [v60.0 Fix] Maintain alpha >= 0.1 to avoid "Jamming" in pockets
+            self.current_alpha = max(self.current_alpha, 0.1)
 
     def soft_clip_vector(self, v, max_norm=10.0):
         """
@@ -1808,7 +1809,8 @@ class MaxFlowExperiment:
                 # Annealing Schedules
                 progress = step / self.config.steps
                 temp = self.config.temp_start + progress * (self.config.temp_end - self.config.temp_start)
-                softness = self.config.softness_start + progress * (self.config.softness_end - self.config.softness_start)
+                # [v60.0 Fix] Softness Guard: Keep alpha >= 0.1 for persistent "Soft Flow"
+                softness = max(self.config.softness_start + progress * (self.config.softness_end - self.config.softness_start), 0.1)
                 
                 # [v55.3] Step 300 Multi-stage Re-noising (Strategic Exploration)
                 if step == 300:
@@ -1882,6 +1884,29 @@ class MaxFlowExperiment:
                         x_P_sub = x_P[near_indices]
                         logger.info(f"   🌊 [v59.7 Multi-Centroid KNN] Sliced {len(pos_P_sub)} atoms for {self.config.pdb_id}.")
 
+                        # [v60.0] The Market-Flow: Miner Survival Mechanism
+                        # Competitive selection per 50 steps to solve pocket macro-entry problem
+                        if step > 0:
+                            centroids = pos_L.mean(dim=1) # (B, 3)
+                            # Diversity = Mean distance of ligand centroids to others in batch
+                            diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
+                            # CRPS Score = -Energy + 0.1 * Diversity
+                            market_scores = -batch_energy + 0.1 * diversity
+                            
+                            _, top_indices = torch.topk(market_scores, k=4)
+                            _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
+                            
+                            logger.info(f"   ⚖️  [Market-Flow] Culling {bottom_indices.tolist()} | Survivors: {top_indices.tolist()}")
+                            
+                            # Clone survivors + Mutate (Stochastic Noise)
+                            for i in range(4):
+                                src_idx = top_indices[i]
+                                dst_idx = bottom_indices[i]
+                                # Clone coordinates, charges, and types
+                                pos_L.data[dst_idx] = pos_L.data[src_idx] + torch.randn_like(pos_L[dst_idx]) * (0.5 * (1.0 - progress))
+                                q_L.data[dst_idx] = q_L.data[src_idx].detach().clone()
+                                x_L.data[dst_idx] = x_L.data[src_idx].detach().clone()
+
                 # Flow Field Prediction
                 # [v58.2 Hotfix] Disable CuDNN to allow double-backward through GRU backbone
                 with torch.backends.cudnn.flags(enabled=False):
@@ -1921,11 +1946,10 @@ class MaxFlowExperiment:
                 # Internal Geometry (Bonds & Angles)
                 e_bond = self.phys.calculate_internal_geometry_score(pos_L_reshaped) 
                 
-                # [v59.7] Continuous Harmonic Curriculum (Polynomial Growth)
-                # Replaces discrete phases to prevent "Stiffness Shock"
-                # Base weights: 500.0 for bond, 50.0 for hard
-                w_bond = 1.0 + (500.0 - 1.0) * (progress ** 1.5)
-                w_hard = 1.0 + (50.0 - 1.0) * (progress ** 1.5)
+                # [v60.0 Relaxed Harmonic Constraints]
+                # Lower weights (100.0/10.0 instead of 500/50) to prevent "Hardening too fast"
+                w_bond = 1.0 + (100.0 - 1.0) * (progress ** 1.5)
+                w_hard = 1.0 + (10.0 - 1.0) * (progress ** 1.5)
                 
                 # Adaptive scaling: Increase constraints as alpha (softness) decreases
                 alpha_factor = 1.0 + 2.0 * (1.0 - alpha / self.phys.params.softness_start)
