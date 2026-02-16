@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v61.9 MaxFlow (ICLR 2026 Golden Calculus Refined - Hard Reality)"
+VERSION = "v62.0 MaxFlow (ICLR 2026 Golden Calculus Refined - The Scientific Frontier)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -338,13 +338,22 @@ class PhysicsEngine:
             dist = torch.sqrt(dist_sq + 1e-9)
             
             # 2. Van der Waals Param Retrieval
-            # 2. Van der Waals Param Retrieval
-            # [v61.9 Fix] Real Physical Dimensions (No scaling)
+            # [Smart Method 3] Radius Annealing Schedule (v62.0)
+            # 0% -> 50%: 半徑 = 0.5 (幽靈模式，穿牆尋找深口袋)
+            # 50% -> 80%: 半徑 = 0.8 (軟接觸，調整姿勢)
+            # 80% -> 100%: 半徑 = 1.0 (硬接觸，真實物理評分)
+            if step_progress < 0.5:
+                radius_scale = 0.5
+            elif step_progress < 0.8:
+                radius_scale = 0.8
+            else:
+                radius_scale = 1.0 # 最後階段回歸真實物理尺寸
+            
             type_probs_L = x_L[..., :9]
-            radii_L = type_probs_L @ self.params.vdw_radii[:9].float()
+            radii_L = (type_probs_L @ self.params.vdw_radii[:9].float()) * radius_scale
             if x_P.dim() == 2: x_P = x_P.unsqueeze(0)
             prot_radii_map = torch.tensor([1.7, 1.55, 1.52, 1.8], device=pos_P.device, dtype=torch.float32)
-            radii_P = (x_P[..., :4] @ prot_radii_map)
+            radii_P = (x_P[..., :4] @ prot_radii_map) * radius_scale
             sigma_ij = radii_L.unsqueeze(-1) + radii_P.unsqueeze(1)
             
             # 3. Soft Energy (Intermolecular: vdW + Coulomb)
@@ -1656,6 +1665,53 @@ class MaxFlowExperiment:
         except Exception as e:
             logger.warning(f"⚠️ Failed to export PyMOL script: {e}")
 
+    def detect_pockets_geometry(self, pos_P, top_k=3):
+        """
+        [Smart Method 1] Geometric Vision (v62.0)
+        計算蛋白表面的凹陷度 (Concavity)，以此作為先驗概率。
+        不依賴 Ground Truth，純幾何計算。
+        """
+        # 1. 計算每個蛋白原子的「鄰居數量」
+        # 在 10A 半徑內，鄰居越多，代表被包圍得越緊 => 越凹
+        # 使用分批計算以防 OOM
+        M = pos_P.size(0)
+        neighbor_counts = torch.zeros(M, device=pos_P.device)
+        batch_size = 1000
+        for i in range(0, M, batch_size):
+            end = min(i + batch_size, M)
+            dist_batch = torch.cdist(pos_P[i:end], pos_P) # (batch, M)
+            neighbor_counts[i:end] = (dist_batch < 10.0).sum(dim=1).float()
+        
+        # 2. 歸一化並轉化為概率
+        # 我們只對「非常凹」的地方感興趣 (Top 10%)
+        threshold = torch.quantile(neighbor_counts, 0.9)
+        pocket_mask = neighbor_counts > threshold
+        
+        # 3. 採樣候選中心
+        candidate_indices = torch.nonzero(pocket_mask).squeeze()
+        if candidate_indices.numel() == 0:
+            return pos_P.mean(dim=0, keepdim=True) # Fallback to COM
+            
+        # 選出鄰居最多的 top_k 個點，且確保它們之間有一定的距離 (防止擠在一起)
+        selected_pockets = []
+        sorted_indices = torch.argsort(neighbor_counts, descending=True)
+        
+        for idx in sorted_indices:
+            candidate = pos_P[idx]
+            if len(selected_pockets) == 0:
+                selected_pockets.append(candidate)
+            else:
+                # 距離現有中心至少 15A
+                dists = torch.norm(torch.stack(selected_pockets) - candidate, dim=-1)
+                if (dists > 15.0).all():
+                    selected_pockets.append(candidate)
+            
+            if len(selected_pockets) >= top_k:
+                break
+                
+        logger.info(f"   🧠 [Smart-Prior] Detected {len(selected_pockets)} geometric pockets based on concavity.")
+        return torch.stack(selected_pockets)
+
     def run(self):
         logger.info(f"🚀 Starting Experiment {VERSION} (TSO-Agentic Mode) on {self.config.target_name}...")
         convergence_history = [] 
@@ -1698,15 +1754,21 @@ class MaxFlowExperiment:
         # Range: [1.0, 0.01] (從普通軟 到 液體)
         bond_factors = 1.0 - 0.99 * miner_genes
 
-        # [v61.0 Debug] Force Correct Pocket Center (Redocking Mode)
-        # 如果開啟 Redocking，強制將搜索中心對準原位配體，並縮減初始噪聲
-        if self.config.redocking:
+        # [v62.0 SOTA] Curvature-Guided Cascade Initialization
+        # 如果不是 Redocking，使用幾何先驗搜索口袋中心
+        if not self.config.redocking:
+            pocket_centers = self.detect_pockets_geometry(pos_P, top_k=3) # (K, 3)
+            K = pocket_centers.size(0)
+            # 將 Batch 分配給不同的中心
+            p_centers_batch = pocket_centers[torch.arange(B, device=device) % K] # (B, 3)
+            noise_scales = 2.0 + miner_genes.view(B, 1, 1) * 10.0 # 縮小搜索半徑 (2A to 12A)
+        else:
             logger.info("   🚀 [Redocking] Pocket-Aware Mode active. Centering on ground truth.")
-            p_center = pos_native.mean(dim=0)
+            p_centers_batch = pos_native.mean(dim=0, keepdim=True).repeat(B, 1) # (B, 3)
             noise_scales = torch.ones_like(noise_scales) * 5.0 # Pocket-local search
             
         # 3. 應用多樣化噪聲
-        pos_L = (p_center.view(1, 1, 3) + torch.randn(B, N, 3, device=device) * noise_scales).detach()
+        pos_L = (p_centers_batch.unsqueeze(1) + torch.randn(B, N, 3, device=device) * noise_scales).detach()
         pos_L.requires_grad = True
         q_L.requires_grad = True
         
