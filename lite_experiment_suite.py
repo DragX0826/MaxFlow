@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v63.3 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Artifact Strategy)"
+VERSION = "v64.0 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Event Horizon Strategy)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -413,15 +413,11 @@ class PhysicsEngine:
             # This provides a stable, non-stiff linear repulsion to drive expansion.
             e_pauli = torch.relu(sigma_ij - dist).sum(dim=(1, 2)) 
             
-            # [v63.3 Fix A] The Artifact: Absolute Exclusion Barrier
-            # Direct quadratic penalty for any atom pair (bonded or not) < 1.3A.
-            # This is an engineered wall that refuses to be ignored by the optimizer.
-            # We calculate this per batch element (B,) to enable per-miner survival.
-            e_artifact = 1000.0 * torch.relu(1.3 - dist).pow(2)
-            e_artifact = e_artifact.sum(dim=(1, 2)) # (B,)
+            # [v64.0 Fix C] Physics Revert: Removing v63.x Spike and Artifact terms.
+            # We return to the stable soft-potential baseline and fix the blind spot in bonds instead.
             
-            # Final Energy Synthesis with Artifact Penalty
-            return e_soft + nuclear_repulsion + e_suction + 100.0 * e_pauli + e_artifact, e_pauli, self.current_alpha
+            # Final Energy Synthesis
+            return e_soft + nuclear_repulsion + e_suction, torch.zeros_like(e_soft), self.current_alpha
 
     # --- SECTION 4: SCIENTIFIC METRICS (ICLR RIGOUR) ---
     def calculate_valency_loss(self, pos_L, x_L):
@@ -446,19 +442,23 @@ class PhysicsEngine:
 
     def calculate_internal_geometry_score(self, pos_L):
         """
-        [v46.0 Integrity] Real harmonic bond potential for all close-contact atoms. 
-        Penalizes structures that deviate from standard 1.5A bond lengths.
+        [v64.0 Fix A] Event Horizon: Harmonic bond potential with NO BLIND SPOT.
+        Penalizes any atom pair closer than 1.5A to ensure structural expansion.
         """
         # pos_L: (B, N, 3)
         B, N, _ = pos_L.shape
-        dist = torch.cdist(pos_L, pos_L) + torch.eye(N, device=device).unsqueeze(0) * 10
-        # Find close atoms (1.1A < r < 2.0A) as potential bonds
-        mask = (dist > 1.1) & (dist < 2.0)
+        dist = torch.cdist(pos_L, pos_L) 
         
-        # [v58.3] Batch-aware Harmonic Penalty: E = 0.5 * k * (r - r0)^2
-        # Use simple reduction that handles sparse masks per sample
-        bond_diff = (dist - self.params.bond_length_mean).pow(2)
-        e_bond = 0.5 * self.params.bond_k * (bond_diff * mask).sum(dim=(1, 2)) / (mask.sum(dim=(1, 2)) + 1e-6)
+        # [v64.0] Blind Spot Eradication: 
+        # Any distance < 1.5A (except self-diagonal) is a violation.
+        eye = torch.eye(N, device=dist.device).unsqueeze(0)
+        mask = (dist < 1.5) & (eye < 0.5) # Exclude self
+        
+        # [v64.0] One-way Repulsion: Only push apart if too close.
+        # This acts as a protective shell (The Event Horizon) around every atom.
+        # Weight 100.0 provides a firm but smooth mathematical floor.
+        bond_diff = torch.relu(1.5 - dist) 
+        e_bond = 100.0 * (bond_diff * mask).pow(2).sum(dim=(1, 2))
         return e_bond
 
     def compute_internal_energy(self, pos_L, bond_idx, angle_idx, softness=0.0):
@@ -1732,8 +1732,8 @@ class MaxFlowExperiment:
         # [v62.9 True North] p_center is already calibrated in the featurizer.
         if self.config.redocking:
             logger.info("   🚀 [Redocking] Pocket-Aware Mode active. Centering on ground truth.")
-            # [v62.9 Genesis Initialization] Tighter noise scale 3.0 ensuring pocket entry
-            noise_scales = torch.ones_like(noise_scales) * 3.0
+            # [v64.0 Fix B] Cloud Genesis: Instead of 3.0A, we use 8.0A for sparse initial gas.
+            noise_scales = torch.ones_like(noise_scales) * 8.0
             
         # 3. 應用多樣化噪聲
         pos_L = (p_center.view(1, 1, 3) + torch.randn(B, N, 3, device=device) * noise_scales).detach()
@@ -2039,17 +2039,20 @@ class MaxFlowExperiment:
                 q_P_batched = q_P_sub.unsqueeze(0).repeat(B, 1)
                 x_P_batched = x_P_sub.unsqueeze(0).repeat(B, 1, 1)
                 
-                # [v63.3 Fix B] Alpha Rescue Logic (Disabled for Artifact Strategy)
-                # if batch_energy.mean() > 1000.0 and step < self.config.steps * 0.8:
-                #     self.phys.current_alpha = max(self.phys.current_alpha, 2.0)
-                #     if step % 10 == 0:
-                #         logger.info(f"   🛡️  [Alpha-Rescue] High Energy ({batch_energy.mean():.1f}) detect, softening alpha=2.0")
+                # [v60.5 Fix] Alpha Rescue Logic (Auto-Softening)
+                # If average energy exceeds 1000, soften the manifold to avoid crashes
+                # [v61.7 Fix] Strict Rescue Ban: 只在前 80% 的步驟允許救援，最後階段必須硬著陸
+                if batch_energy.mean() > 1000.0 and step < self.config.steps * 0.8:
+                    self.phys.current_alpha = max(self.phys.current_alpha, 2.0)
+                    if step % 10 == 0:
+                        logger.info(f"   🛡️  [Alpha-Rescue] High Energy ({batch_energy.mean():.1f}) detect, softening alpha=2.0")
                 
-                # [v63.3 Fix B] Terminal Polishing (Disabled Alpha Softening)
-                # if step >= self.config.steps - 150:
-                #     self.phys.current_alpha = 0.1
-                #     if step % 50 == 0:
-                #         logger.info("   💎 [The Ghost Protocol] Terminal Polishing: Alpha=0.1, Noise=0")
+                # [v61.7 Fix] Terminal Polishing (The Ghost Protocol)
+                # 延長到最後 150 步，強制鎖死 Alpha=0.1 並關閉噪聲
+                if step >= self.config.steps - 150:
+                    self.phys.current_alpha = 0.1
+                    if step % 50 == 0:
+                        logger.info("   💎 [The Ghost Protocol] Terminal Polishing: Alpha=0.1, Noise=0")
                 
                 # Hierarchical Engine Call
                 e_soft, e_hard, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
@@ -2058,17 +2061,12 @@ class MaxFlowExperiment:
                 # Internal Geometry (Bonds & Angles)
                 e_bond = self.phys.calculate_internal_geometry_score(pos_L_reshaped) 
                 
-                # [v60.0 Relaxed Harmonic Constraints]
-                # Lower weights (100.0/10.0 instead of 500/50) to prevent "Hardening too fast"
-                # [v61.5 Fix] Liquid State (The Fluid Swarm): Zero stiffness for first 50%
-                # This allows perfect induced fit before freezing the conformation.
-                # [v63.3 Fix C] Steel Bonds: Maximum structural stiffness
+                # [v62.9 Stable Curriculum]
                 if progress < 0.25:
-                    w_bond_base = 50.0 # Small slack for the initial "Artifact Explosion"
+                    w_bond_base = 0.0 # Unchain early for Cloud Genesis alignment
                 else:
-                    # Ramp up to massive w_bond_base
                     adj_progress = (progress - 0.25) / 0.75
-                    w_bond_base = 500.0 + 500.0 * (adj_progress ** 2)
+                    w_bond_base = 10.0 + 190.0 * (adj_progress ** 2)
                 
                 w_hard = 1.0 + (10.0 - 1.0) * (progress ** 1.5)
                 
@@ -2091,13 +2089,14 @@ class MaxFlowExperiment:
                 # [v59.2 Fix] Use Direction-Preserving Soft-Clip instead of Hard Clamp
                 v_target = self.phys.soft_clip_vector(force_total.detach(), max_norm=20.0)
                 
-                # [v63.3 Fix B] No More Softness: Disabling dynamic alpha update
-                # We from now on use Alpha=0.01 from Step 0 onwards.
-                # f_mag = v_target.norm(dim=-1).mean().item()
-                # self.phys.update_alpha(f_mag)
+                # Update Annealing based on Force Magnitude
+                f_mag = v_target.norm(dim=-1).mean().item()
+                self.phys.update_alpha(f_mag)
                 
-                # [v63.2 Fix C] Forced Cooling (Now absolute for v63.3)
-                self.phys.current_alpha = 0.01
+                # [v63.2 Fix C] Forced Cooling for final crystallization
+                if progress > 0.8:
+                    target_alpha_force = 0.01
+                    self.phys.current_alpha = self.phys.current_alpha * 0.9 + target_alpha_force * 0.1
                 
                 # The Golden Triangle Loss
                 # Pillar 1: Physics-Flow Matching (v58.6: Huber Loss for outlier robustness)
