@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v64.0 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Event Horizon Strategy)"
+VERSION = "v64.1 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Quantum Leap Strategy)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -442,25 +442,27 @@ class PhysicsEngine:
 
     def calculate_internal_geometry_score(self, pos_L):
         """
-        [v64.0 Fix A] Event Horizon: Harmonic bond potential with NO BLIND SPOT.
-        Penalizes any atom pair closer than 1.5A to ensure structural expansion.
+        [v64.1 Fix B] Event Horizon + Neutron Pressure: NO BLIND SPOT.
+        Penalizes any atom pair closer than 1.5A, with extreme penalty < 0.8A.
         """
         # pos_L: (B, N, 3)
         B, N, _ = pos_L.shape
         dist = torch.cdist(pos_L, pos_L) 
         
-        # [v64.0] Blind Spot Eradication: 
-        # Any distance < 1.5A (except self-diagonal) is a violation.
+        # [v64.1] Internal Exclusion Mask
         eye = torch.eye(N, device=dist.device).unsqueeze(0)
-        mask = (dist < 1.5) & (eye < 0.5) # Exclude self
+        mask = (eye < 0.5) # Exclude self
         
-        # [v64.0] One-way Repulsion: Only push apart if too close.
-        # This acts as a protective shell (The Event Horizon) around every atom.
-        # Weight 100.0 provides a firm but smooth mathematical floor.
+        # [v64.0 Fix A] 1.5A Event Horizon (The "Gas" expansion floor)
         bond_diff = torch.relu(1.5 - dist) 
-        e_bond = 100.0 * (bond_diff * mask).pow(2).sum(dim=(1, 2))
-        return e_bond
-
+        e_bond = 100.0 * (bond_diff * (dist < 1.5) * mask).pow(2)
+        
+        # [v64.1 Fix B] Neutron Degeneracy Pressure (Absolute hard shell)
+        # Prevents collapse into the 0.3A "Singularity" seen in v64.0
+        e_neutron = 1e6 * torch.relu(0.8 - dist) * mask
+        
+        return (e_bond + e_neutron).sum(dim=(1, 2))
+    
     def compute_internal_energy(self, pos_L, bond_idx, angle_idx, softness=0.0):
         """
         Computes bonded energy within the ligand.
@@ -1732,8 +1734,9 @@ class MaxFlowExperiment:
         # [v62.9 True North] p_center is already calibrated in the featurizer.
         if self.config.redocking:
             logger.info("   🚀 [Redocking] Pocket-Aware Mode active. Centering on ground truth.")
-            # [v64.0 Fix B] Cloud Genesis: Instead of 3.0A, we use 8.0A for sparse initial gas.
-            noise_scales = torch.ones_like(noise_scales) * 8.0
+            # [v64.1 Fix A] Point Zero Genesis: Instead of exploration, we start at Point Zero.
+            # 0.5A noise ensures we start exactly at the pocket center for refinement.
+            noise_scales = torch.ones_like(noise_scales) * 0.5
             
         # 3. 應用多樣化噪聲
         pos_L = (p_center.view(1, 1, 3) + torch.randn(B, N, 3, device=device) * noise_scales).detach()
@@ -2061,12 +2064,13 @@ class MaxFlowExperiment:
                 # Internal Geometry (Bonds & Angles)
                 e_bond = self.phys.calculate_internal_geometry_score(pos_L_reshaped) 
                 
-                # [v62.9 Stable Curriculum]
+                # [v64.1 Fix A] Constant Pressure: w_bond is never zero.
+                # Atoms must fight to expand from Step 0.
                 if progress < 0.25:
-                    w_bond_base = 0.0 # Unchain early for Cloud Genesis alignment
+                    w_bond_base = 100.0 # High pressure for initial expansion
                 else:
                     adj_progress = (progress - 0.25) / 0.75
-                    w_bond_base = 10.0 + 190.0 * (adj_progress ** 2)
+                    w_bond_base = 100.0 + 400.0 * (adj_progress ** 2)
                 
                 w_hard = 1.0 + (10.0 - 1.0) * (progress ** 1.5)
                 
@@ -2116,14 +2120,12 @@ class MaxFlowExperiment:
                 s_mean = s_current.view(B, N, -1).mean(dim=1) # (B, H)
                 loss_semantic = (s_mean - esm_anchor.view(B, -1)).pow(2).mean()
                 
-                # [v62.9 True North] Centroid Traction Loss
-                # Gently pull the ligand's centroid towards the pocket center (p_center)
-                # This prevents "Pocket Escape" without causing structural collapse.
-                ligand_centroid = pos_L.mean(dim=1) # (B, 3)
-                loss_traction = (ligand_centroid - p_center.view(1, 3)).pow(2).mean()
+                # [v64.1 Fix C] Frozen Navigation: Zero Traction
+                # Since we start at Point Zero, traction weight is set to 0.0 to prevent self-compression.
+                loss_traction = 0.0 # Just define for downstream addition
                 
-                # Unified Formula: FM + RJF + Semantic + Traction
-                loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 5.0 * loss_traction
+                # Unified Formula: FM + RJF + Semantic (No Traction)
+                loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic 
 
                 # [v59.5 Fix] NaN Sentry inside the loop
                 # Check for NaNs immediately after backward
