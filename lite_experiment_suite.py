@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.8 MaxFlow (ICLR 2026 Golden Calculus Refined - Stability Hotfix II)"
+VERSION = "v62.9 MaxFlow (ICLR 2026 Golden Calculus Refined - Stability Hotfix III)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -2299,7 +2299,8 @@ class MaxFlowExperiment:
                 history_E.append(loss.item())
                 if step % 100 == 0:
                     e_min = batch_energy.min().item()
-                    logger.info(f"   Step {step}: Loss={loss.item():.2f}, E_min={e_min:.2f}, Alpha={alpha:.3f}")
+                    alpha_val = alpha.mean().item() if torch.is_tensor(alpha) else alpha
+                    logger.info(f"   Step {step}: Loss={loss.item():.2f}, E_min={e_min:.2f}, Alpha={alpha_val:.3f}")
 
             # [v58.1] Rewards definition for reporting
             rewards = -batch_energy.detach()
