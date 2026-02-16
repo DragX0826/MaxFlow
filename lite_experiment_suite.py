@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v61.4 MaxFlow (ICLR 2026 Golden Calculus Refined - Breaching the Barrier)"
+VERSION = "v61.5 MaxFlow (ICLR 2026 Golden Calculus Refined - The Ghost Walker)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -376,8 +376,14 @@ class PhysicsEngine:
             r_safe = torch.clamp(dist, min=0.4) 
             
             # [v61.2 Fix] Softer Shield Start: Allow early-stage penetration
-            # Ramp up weight: 0.1 (start) -> 1000.0 (end) with cubic ramp
-            w_nuc = 0.1 + 999.9 * (step_progress**3) 
+            # [v61.5 Fix] Nuclear Ghosting (Quantum Tunneling)
+            # Disable repulsion for first 30% of steps to allow pocket infiltration
+            if step_progress < 0.3:
+                w_nuc = 0.0
+            else:
+                adjusted_progress = (step_progress - 0.3) / 0.7
+                # Ramp up weight: 0.1 (original start) -> 1000.0 (end) with cubic ramp
+                w_nuc = 0.1 + 999.9 * (adjusted_progress**3)
             
             # Calculate repulsion but clamp the MAXIMUM energy value
             # [v61.3 Fix] Deep Shield Cutoff (0.5A)
@@ -2027,7 +2033,15 @@ class MaxFlowExperiment:
                 
                 # [v60.0 Relaxed Harmonic Constraints]
                 # Lower weights (100.0/10.0 instead of 500/50) to prevent "Hardening too fast"
-                w_bond_base = 1.0 + (100.0 - 1.0) * (progress ** 1.5)
+                # [v61.5 Fix] Liquid State (The Fluid Swarm): Zero stiffness for first 50%
+                # This allows perfect induced fit before freezing the conformation.
+                if progress < 0.5:
+                    w_bond_base = 0.0
+                else:
+                    # Ramp up w_bond_base starting from 0.5
+                    adj_progress = (progress - 0.5) / 0.5
+                    w_bond_base = 1.0 + (100.0 - 1.0) * (adj_progress ** 1.5)
+                
                 w_hard = 1.0 + (10.0 - 1.0) * (progress ** 1.5)
                 
                 # [v60.6] Phenotype Expression (DNA Physics)
