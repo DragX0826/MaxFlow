@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v63.1 MaxFlow (ICLR 2026 Golden Calculus Refined - The Robust Field)"
+VERSION = "v61.8 MaxFlow (ICLR 2026 Golden Calculus Refined - Seismic Rescue)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -264,12 +264,9 @@ class ForceFieldParameters:
         self.softness_start = 5.0
         self.softness_end = 0.0
 
-        # [v62.5 Fix] Shared Protein Radii Map
-        self.prot_radii_map = torch.tensor([1.7, 1.55, 1.52, 1.8], dtype=torch.float32)
-
 class PhysicsEngine:
     """
-    Differentiable Molecular Mechanics Engine (v62.5).
+    Differentiable Molecular Mechanics Engine (v21.0).
     Supports:
     - Electrostatics (Coulomb with soft-core)
     - Van der Waals (Lennard-Jones 12-6 with soft-core)
@@ -315,78 +312,110 @@ class PhysicsEngine:
         [v59.2] Direction-preserving soft clip.
         Solving the 'Exploding Gradient' problem during stiffness shocks.
         """
-        norm = torch.norm(v, dim=-1, keepdim=True)
-        scale = torch.tanh(norm / max_norm) * max_norm / (norm + 1e-8)
+        norm = v.norm(dim=-1, keepdim=True)
+        scale = (max_norm * torch.tanh(norm / max_norm)) / (norm + 1e-6)
         return v * scale
-
-    def compute_gaussian_energy(self, x_L, x_P, sigma=1.0):
-        """
-        [v63.1 Robust] Gaussian Smoothed Potential
-        使用平方和展開取代 torch.cdist，避免 r=0 時的梯度不穩定。
-        """
-        # 計算距離平方矩陣 (B, N_L, N_P)
-        # dist_sq = |x_L - x_P|^2 = x_L^2 + x_P^2 - 2*x_L*x_P
-        dist_sq = (x_L.unsqueeze(2) - x_P.unsqueeze(1)).pow(2).sum(-1)
-        
-        # 高斯吸引勢能: E = -Sum( exp( -r^2 / 2*sigma^2 ) )
-        gauss_term = torch.exp(-dist_sq / (2 * sigma**2 + 1e-6))
-        
-        return -10.0 * gauss_term.sum(dim=(1, 2))
 
     def compute_energy(self, pos_L, pos_P, q_L, q_P, x_L, x_P, step_progress=0.0):
         """
-        v63.1: The Robust Field (C1 Blending + Alpha Sync)
+        [v59.5] FP32 Sanctuary. 
+        Forces physics calculation in float32 to prevent NaN in gradients under FP16.
         """
+        # [Critical Fix] Disable Autocast for physics math
         with torch.cuda.amp.autocast(enabled=False):
-            pos_L, pos_P, q_L, q_P = pos_L.float(), pos_P.float(), q_L.float(), q_P.float()
-            x_L, x_P = x_L.float(), x_P.float()
-            B = pos_L.size(0)
+            # 1. Cast everything to float32 for stable high-precision math
+            pos_L = pos_L.float()
+            pos_P = pos_P.float()
+            q_L = q_L.float()
+            q_P = q_P.float()
+            x_L = x_L.float()
+            x_P = x_P.float()
 
             # [v59.3 Fix] Joint Centric Alignment
             combined_pos = torch.cat([pos_L, pos_P], dim=1) 
             joint_com = combined_pos.mean(dim=1, keepdim=True) 
             pos_L_aligned = pos_L - joint_com
             pos_P_aligned = pos_P - joint_com
-
-            # [v63.0] Sigmoidal Blending
-            w_sigmoid = torch.sigmoid(torch.tensor(15.0 * (step_progress - 0.6), device=pos_L.device))
             
-            # --- Field 1: Gaussian Smoothing ---
-            current_sigma = 5.0 - 4.0 * step_progress
-            e_gauss = self.compute_gaussian_energy(pos_L_aligned, pos_P_aligned, sigma=current_sigma)
+            # [v59.6 Fix] Stable Distance calculation for Gradient Stability
+            # torch.cdist has undefined gradients at dist=0, which causes Step 0 NaNs.
+            # Explicit squared distance + safe sqrt(eps) ensures finite gradients.
+            # (B, N, 1, 3) - (B, 1, M, 3) -> (B, N, M, 3)
+            diff = pos_L_aligned.unsqueeze(2) - pos_P_aligned.unsqueeze(1)
+            dist_sq = diff.pow(2).sum(dim=-1)
+            dist = torch.sqrt(dist_sq + 1e-9)
             
-            suction_weight = 5.0 * (1.0 - w_sigmoid) + 1.0 * w_sigmoid
-            center_dist = torch.norm(pos_L_aligned.mean(dim=1), dim=-1)
-            e_suction = suction_weight * center_dist.pow(2)
-
-            # --- Field 2: Ghost Materialization (LJ) ---
-            # Safe squared dist to avoid NaN at r=0
-            dist_sq = (pos_L_aligned.unsqueeze(2) - pos_P_aligned.unsqueeze(1)).pow(2).sum(-1)
-            dists = torch.sqrt(dist_sq + 1e-8)
+            # 2. Van der Waals Param Retrieval
+            # [v61.8 SOTA Logic] Dynamic Radius Refinement (Soft Docking)
+            # 0.6x (Infiltration) -> 0.85x (Seating). Prevents early jamming and late ejection.
+            radius_scale = 0.6 + 0.25 * step_progress 
             
-            radius_scale = 0.3 + 0.6 * step_progress 
             type_probs_L = x_L[..., :9]
             radii_L = (type_probs_L @ self.params.vdw_radii[:9].float()) * radius_scale
-            
             if x_P.dim() == 2: x_P = x_P.unsqueeze(0)
-            prot_radii_map = self.params.prot_radii_map.to(pos_P.device)
+            prot_radii_map = torch.tensor([1.7, 1.55, 1.52, 1.8], device=pos_P.device, dtype=torch.float32)
             radii_P = (x_P[..., :4] @ prot_radii_map) * radius_scale
             sigma_ij = radii_L.unsqueeze(-1) + radii_P.unsqueeze(1)
             
-            inv_sc_dist = sigma_ij / (dists + 1e-6)
-            e_vdw = 1.0 * (inv_sc_dist.pow(12) - 2.0 * inv_sc_dist.pow(6))
-            e_lj = e_vdw.sum(dim=(1, 2))
+            # 3. Soft Energy (Intermolecular: vdW + Coulomb)
+            dielectric = 4.0 
+            soft_dist_sq = dist_sq + self.current_alpha * sigma_ij.pow(2)
             
-            w_nuc = 0.1 * w_sigmoid 
-            nuclear_repulsion = w_nuc * (0.6 / (dists + 0.1)).pow(12).sum(dim=(1, 2))
-            e_clash = (dists < sigma_ij * 0.6).float().sum(dim=(1, 2))
+            # Coulomb
+            if q_L.dim() == 2: # (Batch, N)
+                 q_L_exp = q_L.unsqueeze(2) # (B, N, 1)
+                 q_P_exp = q_P.view(q_P.size(0) if q_P.dim() > 1 else 1, 1, -1)
+                 e_elec = (332.06 * q_L_exp * q_P_exp) / (dielectric * torch.sqrt(soft_dist_sq))
+            else: # (N,)
+                 e_elec = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * torch.sqrt(soft_dist_sq))
             
-            # [v63.1] Alpha Sync: 確保 Alpha-Rescue 能影響混合場
-            target_alpha = 5.0 * (1.0 - step_progress) + 0.1
-            effective_alpha = (1.0 - w_sigmoid) * 5.0 + w_sigmoid * max(target_alpha, self.current_alpha)
+            # vdW
+            inv_sc_dist = sigma_ij.pow(2) / (dist_sq + self.current_alpha * sigma_ij.pow(2) + 1e-6)
+            # [v61.3 Fix] Hyper-Attraction (10.0): "Vacuum Suction" into global minimum
+            e_vdw = 10.0 * (inv_sc_dist.pow(6) - inv_sc_dist.pow(3))
+            
+            # [v60.5 Fix] Safe Nuclear Shield
+            # Prevent NaN by clamping minimum distance for repulsion calculation
+            # [v61.3 Fix] Deep Penetration Clamp (0.4A)
+            r_safe = torch.clamp(dist, min=0.4) 
+            
+            # [v61.2 Fix] Softer Shield Start: Allow early-stage penetration
+            # [v61.5 Fix] Nuclear Ghosting (Quantum Tunneling)
+            # [v61.8 Fix] Soft Nuclear Shield: Max weight 100.0 to prevent infinite walls
+            if step_progress < 0.3:
+                w_nuc = 0.0
+            else:
+                adjusted_progress = (step_progress - 0.3) / 0.7
+                # Ramp up weight: 0.1 (original start) -> 100.0 (end) with quadratic ramp
+                w_nuc = 0.1 + 99.9 * (adjusted_progress**2)
+            
+            # Calculate repulsion but clamp the MAXIMUM energy value
+            # [v61.8 Fix] Deep Shield Cutoff (0.5A) with soft clamp (500)
+            raw_repulsion = (0.5 / r_safe).pow(12)
+            clamped_repulsion = torch.clamp(raw_repulsion, max=500.0) 
+            
+            nuclear_repulsion = w_nuc * clamped_repulsion.sum(dim=(1,2))
+            
+            # [v61.4 Fix] Centripetal Suction (Solvent Exclusion Proxy)
+            # [v61.8 Fix] Suction Decay: Shut down after 70% to allow wall-seating
+            suction_decay = max(0.0, 1.0 - (step_progress / 0.7)**2)
+            dist_to_center = torch.norm(pos_L_aligned, dim=-1) # (B, N)
+            e_suction = 0.5 * dist_to_center.pow(2).mean(dim=-1) * suction_decay # (B,)
+            
+            # [v59.1 Fix] Attention-weighted Forces (Soft Distogram Simulation)
+            attn_weights = F.softmax(-dist / 1.0, dim=-1) # (B, N, M)
+            e_inter = (e_elec + e_vdw) * attn_weights
+            e_soft = e_inter.sum(dim=(1, 2))
 
-            e_total = (1.0 - w_sigmoid) * (e_gauss + e_suction) + w_sigmoid * (e_lj + nuclear_repulsion)
-            return e_total, e_clash * w_sigmoid, effective_alpha
+            # [v59.5 Fix] NaN Sentry
+            if torch.isnan(e_soft).any():
+                logger.warning("NaN detected in Soft Energy (handled by nan_to_num)")
+                e_soft = torch.nan_to_num(e_soft, nan=1000.0)
+            
+            # 4. Hard Energy (Severe Clashes)
+            e_clash = torch.relu(sigma_ij - dist).pow(2).sum(dim=(1, 2))
+            
+            return e_soft + nuclear_repulsion + e_suction, e_clash, self.current_alpha
 
     # --- SECTION 4: SCIENTIFIC METRICS (ICLR RIGOUR) ---
     def calculate_valency_loss(self, pos_L, x_L):
@@ -1686,8 +1715,9 @@ class MaxFlowExperiment:
         noise_scales = 2.0 + miner_genes.view(B, 1, 1) * 23.0 # Range: [2.0, 25.0]
         
         # 2. 幾何剛性基因 (Geometric Stiffness)
-        # [v61.7 Parameter] Liquid/Flexible Skeleton
-        bond_factors = 1.0 - 0.9 * miner_genes # Range: [1.0, 0.1]
+        # [v61.7 Fix] Liquid State: 允許鍵長在初期極度壓縮，以通過瓶頸
+        # Range: [1.0, 0.01] (從普通軟 到 液體)
+        bond_factors = 1.0 - 0.99 * miner_genes
 
         # [v61.0 Debug] Force Correct Pocket Center (Redocking Mode)
         # 如果開啟 Redocking，強制將搜索中心對準原位配體，並縮減初始噪聲
@@ -1929,36 +1959,36 @@ class MaxFlowExperiment:
                                     market_base_scores = -batch_energy
                             
                             centroids = pos_L.mean(dim=1) # (B, 3)
-                            # Diversity = Mean distance of ligand centroids to others in batch
-                            diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
-                            # CRPS Score = -Energy + 0.1 * Diversity (Selection from Base Score pool)
-                            market_scores = market_base_scores + 0.1 * diversity
+                            # [v60.8] DNA Mutation (10% chance)
+                            if random.random() < 0.1:
+                                # Use scalar for mutation to avoid broadcast errors [RuntimeError Fix]
+                                mutation = 0.8 + 0.4 * random.random() # 0.8 ~ 1.2
+                                bond_factors.data[dst_idx] *= mutation
+                        
+                        # [v61.8 Fix] The Market-Flow: Z-Score Normalization
+                        # Balance Energy and Diversity via normalized units
+                        with torch.no_grad():
+                            e_std = batch_energy.std() + 1e-6
+                            norm_energy = (batch_energy - batch_energy.mean()) / e_std
                             
-                            _, top_indices = torch.topk(market_scores, k=4)
-                            _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
+                            div_std = diversity.std() + 1e-6
+                            norm_diversity = (diversity - diversity.mean()) / div_std
                             
-                            valid_count = validly_mask.sum().item()
-                            logger.info(f"   ⚖️  [Market-Flow] {valid_count}/{B} Valid | Survivors: {top_indices.tolist()}")
+                            # Maximize Diversity(+), Minimize Energy(-) -> Maximize Score
+                            market_scores = -0.7 * norm_energy + 0.3 * norm_diversity
                             
-                            # Clone survivors + Mutate (Stochastic Noise)
-                            for i in range(4):
-                                src_idx = top_indices[i]
-                                dst_idx = bottom_indices[i]
-                                # Clone coordinates, charges, and types
-                                pos_L.data[dst_idx] = pos_L.data[src_idx] + torch.randn_like(pos_L[dst_idx]) * (0.5 * (1.0 - progress))
-                                q_L.data[dst_idx] = q_L.data[src_idx].detach().clone()
-                                x_L.data[dst_idx] = x_L.data[src_idx].detach().clone()
-                                
-                                # [v60.6] The Viral Update (Parameter Infection)
-                                # 這是演化算法的核心：強者的基因會統治種群
-                                noise_scales.data[dst_idx] = noise_scales.data[src_idx].clone()
-                                bond_factors.data[dst_idx] = bond_factors.data[src_idx].clone()
-                                
-                                # [v60.8] DNA Mutation (10% chance)
-                                if random.random() < 0.1:
-                                    # Use scalar for mutation to avoid broadcast errors [RuntimeError Fix]
-                                    mutation = 0.8 + 0.4 * random.random() # 0.8 ~ 1.2
-                                    bond_factors.data[dst_idx] *= mutation
+                        _, top_indices = torch.topk(market_scores, k=4)
+                        _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
+                        
+                        # Clone & Mutate as above
+                        for i in range(4):
+                            src_idx = top_indices[i]
+                            dst_idx = bottom_indices[i]
+                            pos_L.data[dst_idx] = pos_L.data[src_idx] + torch.randn_like(pos_L[dst_idx]) * (0.5 * (1.0 - progress))
+                            q_L.data[dst_idx] = q_L.data[src_idx].detach().clone()
+                            x_L.data[dst_idx] = x_L.data[src_idx].detach().clone()
+                            noise_scales.data[dst_idx] = noise_scales.data[src_idx].clone()
+                            bond_factors.data[dst_idx] = bond_factors.data[src_idx].clone()
 
                 # Flow Field Prediction
                 # [v58.2 Hotfix] Disable CuDNN to allow double-backward through GRU backbone
@@ -2009,7 +2039,8 @@ class MaxFlowExperiment:
                 
                 # Hierarchical Engine Call
                 e_soft, e_hard, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
-                                                                 x_L, x_P_batched, step_progress=step / self.config.steps)
+                                                               x_L_for_physics, x_P_batched, progress)
+                
                 # Internal Geometry (Bonds & Angles)
                 e_bond = self.phys.calculate_internal_geometry_score(pos_L_reshaped) 
                 
@@ -2111,7 +2142,22 @@ class MaxFlowExperiment:
                     patience_counter = 0
                 else:
                     patience_counter += 1
-                    
+                
+                # [v61.8 Fix] Seismic Rescue (The Shake-up)
+                # If stuck at 4.8A trap mid-simulation, apply random rotational resets
+                if 600 < step < 900 and patience_counter > 10 and step % 50 == 0:
+                    logger.info("   ⚠️ [Seismic Rescue] Stuck in local min detected! Applying strong rotation.")
+                    with torch.no_grad():
+                        # Rand rot using scipy
+                        rand_rot = Rotation.random(num=B).as_matrix()
+                        rand_rot_t = torch.tensor(rand_rot, device=device, dtype=torch.float32)
+                        # Rotate around COM
+                        centroids_L = pos_L.mean(dim=1, keepdim=True)
+                        pos_L.data = torch.bmm(pos_L - centroids_L, rand_rot_t) + centroids_L
+                        # Reset manifold softness
+                        self.phys.current_alpha = 3.0 
+                        patience_counter = 0
+
                 if patience_counter >= MAX_PATIENCE:
                     # [v61.0 SOTA Logic] Cyclic Annealing / Thermal Resurrection
                     # 如果在早期偵測到收斂，發動「熱衝擊」炸出局部極小值
@@ -2167,8 +2213,7 @@ class MaxFlowExperiment:
                 
                 # [v58.0] Master Clean Reporting
                 if step % 50 == 0:
-                    alpha_val = alpha.mean().item() if torch.is_tensor(alpha) else alpha
-                    logger.info(f"   Step {step:03d} | E: {batch_energy.mean().item():.2f} | Alpha: {alpha_val:.3f} | FM: {loss_fm.item():.4f}")
+                    logger.info(f"   Step {step:03d} | E: {batch_energy.mean().item():.2f} | Alpha: {alpha:.3f} | FM: {loss_fm.item():.4f}")
                 
                 # Trajectory updates handled by unified Drifting Field
                 if self.config.mode == "inference":
@@ -2191,8 +2236,8 @@ class MaxFlowExperiment:
                     else:
                         scaler.unscale_(opt)
                     
-                    # [v59.5 Fix] Stronger Gradient Clipping (0.5 instead of 1.0) for high-rigidity stability
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+                    # [v59.5 Fix] Stronger Gradient Clipping (Clip 10.0 for 61.8 flips)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0) 
                     
                     if self.config.use_muon:
                         scaler.step(opt_muon)
@@ -2247,6 +2292,12 @@ class MaxFlowExperiment:
                 
                 # [STABILITY] Early Stopping
             
+            # Keep log (v58.1)
+            if step % 10 == 0:
+                history_E.append(loss.item())
+                if step % 100 == 0:
+                    e_min = batch_energy.min().item()
+                    logger.info(f"   Step {step}: Loss={loss.item():.2f}, E_min={e_min:.2f}, Alpha={alpha:.3f}")
 
             # [v58.1] Rewards definition for reporting
             rewards = -batch_energy.detach()
