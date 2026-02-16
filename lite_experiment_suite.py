@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v61.8.2 MaxFlow (ICLR 2026 Golden Calculus Refined - Seismic Rescue Hotfix II)"
+VERSION = "v61.9 MaxFlow (ICLR 2026 Golden Calculus Refined - Pauli Incompatibility)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -245,9 +245,9 @@ class ForceFieldParameters:
     Includes atom-specific VdW radii, bond constants, etc.
     """
     def __init__(self):
-        # Atomic Radii (Angstroms) for C, N, O, S, F, P, Cl, Br, I
-        # [v61.6 Fix] Extreme Atomic Shrinkage (0.80x) to allow high-density biological packing
-        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device) * 0.80
+        # [v61.9 Fix] Restore Natural VdW Radii (Removing static 0.80x shrinkage)
+        # Prevents "Double Shrinkage" when combined with dynamic radius_scale.
+        self.vdw_radii = torch.tensor([1.7, 1.55, 1.52, 1.8, 1.47, 1.8, 1.75, 1.85, 1.98], device=device)
         # Epsilon (Well depth, kcal/mol)
         self.epsilon = torch.tensor([0.1, 0.1, 0.15, 0.2, 0.1, 0.2, 0.2, 0.2, 0.3], device=device)
         # [v57.0] Standard Valencies for C, N, O, S, F, P, Cl, Br, I
@@ -1962,6 +1962,16 @@ class MaxFlowExperiment:
                                 # [v61.8 Fix] Restore Diversity: Mean distance of ligand centroids to others in batch
                                 diversity = torch.cdist(centroids, centroids).mean(dim=1) # (B,)
                             
+                                # [v61.9 Fix] Pauli Exclusion Principle: Check for internal atom collisions
+                                # If atoms within a miner are too close (< 0.7A), it's a "Singularity"
+                                pos_L_square = pos_L.unsqueeze(2) # (B, N, 1, 3)
+                                pos_L_square_T = pos_L.unsqueeze(1) # (B, 1, N, 3)
+                                # (B, N, N)
+                                internal_dist_sq = (pos_L_square - pos_L_square_T).pow(2).sum(dim=-1)
+                                # Add 10.0 to diagonal to ignore self-distance
+                                internal_dist = torch.sqrt(internal_dist_sq + torch.eye(N, device=device).unsqueeze(0) * 10.0)
+                                is_collapsed = internal_dist.min(dim=1)[0].min(dim=1)[0] < 0.7 # (B,)
+                            
                                 # [v61.8 Fix] The Market-Flow: Z-Score Normalization
                                 # Balance Energy and Diversity via normalized units
                                 e_std = batch_energy.std() + 1e-6
@@ -1972,6 +1982,9 @@ class MaxFlowExperiment:
                                 
                                 # Maximize Diversity(+), Minimize Energy(-) -> Maximize Score
                                 market_scores = -0.7 * norm_energy + 0.3 * norm_diversity
+
+                                # Apply Pauli Penalty: Cull collapsed miners
+                                market_scores[is_collapsed] -= 1e6
                                 
                             _, top_indices = torch.topk(market_scores, k=4)
                             _, bottom_indices = torch.topk(market_scores, k=4, largest=False)
@@ -2078,7 +2091,11 @@ class MaxFlowExperiment:
                 force_total = -torch.autograd.grad(total_energy.sum(), pos_L, create_graph=False, retain_graph=True)[0]
                 
                 # [v59.2 Fix] Use Direction-Preserving Soft-Clip instead of Hard Clamp
-                v_target = self.phys.soft_clip_vector(force_total.detach(), max_norm=20.0)
+                # [v61.9 Fix] Repulsion Unclipping: Allow massive repulsive forces during clashes
+                if e_hard.mean() < 10.0:
+                    v_target = self.phys.soft_clip_vector(force_total.detach(), max_norm=20.0)
+                else:
+                    v_target = force_total.detach() # Allow explosive force to resolve singularity
                 
                 # Update Annealing based on Force Magnitude
                 f_mag = v_target.norm(dim=-1).mean().item()
