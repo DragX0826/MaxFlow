@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.6 MaxFlow (ICLR 2026 Golden Calculus Refined - The Great Comparison)"
+VERSION = "v62.7 MaxFlow (ICLR 2026 Golden Calculus Refined - Hotfix)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -2054,7 +2054,7 @@ class MaxFlowExperiment:
                         logger.info("   💎 [The Ghost Protocol] Terminal Polishing: Alpha=0.1, Noise=0")
                 
                 # Hierarchical Engine Call
-                e_soft, e_clash, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
+                e_soft, e_hard, alpha = self.phys.compute_energy(pos_L_reshaped, pos_P_batched, q_L, q_P_batched, 
                                                                  x_L, x_P_batched, step_progress=step / self.config.steps,
                                                                  clan_params=clan_params)
                 # Internal Geometry (Bonds & Angles)
