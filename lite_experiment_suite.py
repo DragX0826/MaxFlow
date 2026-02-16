@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.0 MaxFlow (ICLR 2026 Golden Calculus Refined - Bond-First Strategy)"
+VERSION = "v62.1 MaxFlow (ICLR 2026 Golden Calculus Refined - Steel Mold Strategy)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1980,8 +1980,12 @@ class MaxFlowExperiment:
                                 div_std = diversity.std() + 1e-6
                                 norm_diversity = (diversity - diversity.mean()) / div_std
                                 
-                                # Maximize Diversity(+), Minimize Energy(-) -> Maximize Score
-                                market_scores = -0.7 * norm_energy + 0.3 * norm_diversity
+                                # [v62.1 Fix B] Market Regulation: Diversity only for stable configurations (E < 0)
+                                is_stable = batch_energy < 0.0
+                                market_scores = -0.7 * norm_energy
+                                # Reward diversity (+) for stable, penalize (-) for unstable (explosion-seeking)
+                                market_scores[is_stable] += 0.3 * norm_diversity[is_stable]
+                                market_scores[~is_stable] -= 0.5 * norm_diversity[~is_stable]
 
                                 # Apply Pauli Penalty: Cull collapsed miners
                                 market_scores[is_collapsed] -= 1e6
@@ -2119,8 +2123,15 @@ class MaxFlowExperiment:
                 min_neighbor_dist = dist_matrix.min(dim=-1)[0] # (B, N)
                 loss_cohesion = torch.relu(min_neighbor_dist - 1.6).pow(2).mean()
 
-                # Unified Formula: FM + RJF + Semantic + Cohesion
-                loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 5.0 * loss_cohesion
+                # [v62.1 Fix A] Radius of Gyration (Rg) Penalty: Compactness
+                # Forces "Spaghetti" back into "Meatballs" (Compact sphere)
+                center_of_mass = pos_L_reshaped.mean(dim=1, keepdim=True)
+                dist_to_com = (pos_L_reshaped - center_of_mass).norm(dim=-1)
+                rg = torch.sqrt(dist_to_com.pow(2).mean(dim=-1))
+                loss_compact = torch.relu(rg - 4.0).pow(2)
+
+                # Unified Formula: FM + RJF + Semantic + Cohesion + Compactness
+                loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 5.0 * loss_cohesion + 10.0 * loss_compact.mean()
 
                 # [v59.5 Fix] NaN Sentry inside the loop
                 # Check for NaNs immediately after backward
@@ -2277,6 +2288,10 @@ class MaxFlowExperiment:
                 if self.config.mode == "inference":
                     with torch.no_grad():
                         dt_euler = 1.0 / self.config.steps
+                        # [v62.1 Fix C] Oscillation Damping: 0.1x update in final stretch
+                        if progress > 0.8:
+                            dt_euler *= 0.1
+                        
                         drift_coeff = 1.0 - t_val 
                         
                         # Calculate Physics Residual Drift: u_t = (Force - Neural Prediction)
