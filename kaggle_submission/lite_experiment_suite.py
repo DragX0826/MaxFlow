@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.2 MaxFlow (ICLR 2026 Golden Calculus Refined - Time-Division Multiplexing)"
+VERSION = "v62.3 MaxFlow (ICLR 2026 Golden Calculus Refined - Dark Matter Mode)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -338,9 +338,10 @@ class PhysicsEngine:
             dist = torch.sqrt(dist_sq + 1e-9)
             
             # 2. Van der Waals Param Retrieval
-            # [Smart Method 3] Radius Annealing Schedule (v62.1)
-            # [v62.1 Fix] Optimized Ghost Scale (0.5 -> 0.8) for better rigid penetration
-            radius_scale = 0.5 + 0.3 * step_progress 
+            # [Smart Method 3] Radius Annealing Schedule (v62.3)
+            # [v62.3 Fix] Constant Golden Radius (0.8)
+            # Dark Matter Mode handles barrier crossing, so we use the optimal seating volume throughout.
+            radius_scale = 0.8
             
             type_probs_L = x_L[..., :9]
             radii_L = (type_probs_L @ self.params.vdw_radii[:9].float()) * radius_scale
@@ -384,8 +385,16 @@ class PhysicsEngine:
             
             # [v59.1 Fix] Attention-weighted Forces (Soft Distogram Simulation)
             attn_weights = F.softmax(-dist / 1.0, dim=-1) # (B, N, M)
+            # [v62.3 Fix] Dark Matter Mode: Phase 1 (0-50%)
+            # Clamp soft energy to purely attractive values (max=0.0). 
+            # This allows the ligand to bypass the hidden steric resistance in the VdW potential.
             e_inter = (e_elec + e_vdw) * attn_weights
-            e_soft = e_inter.sum(dim=(1, 2))
+            e_soft_raw = e_inter.sum(dim=(1, 2))
+            
+            if step_progress < 0.5:
+                e_soft = torch.clamp(e_soft_raw, max=0.0) # Absolute Zero Repulsion
+            else:
+                e_soft = e_soft_raw
 
             # [v59.5 Fix] NaN Sentry
             if torch.isnan(e_soft).any():
@@ -395,14 +404,14 @@ class PhysicsEngine:
             # 4. Hard Energy (Severe Clashes)
             e_clash = torch.relu(sigma_ij - dist).pow(2).sum(dim=(1, 2))
             
-            # [v62.2 Fix] Gentle COM Suction
+            # [v62.3 Fix] Stronger COM Suction (Dark Matter Guidance)
             # Pulls ligand as a whole ship towards the harbor center, preventing atom-wise collapse.
             # 1. Compute COM in aligned space (B, 1, 3)
             current_com = pos_L_aligned.mean(dim=1, keepdim=True)
             # 2. Compute distance from COM to center (which is 0 in aligned space) (B, 1)
             dist_com_to_center = torch.norm(current_com, dim=-1) # (B, 1)
             # 3. Apply suction force on the global translation
-            e_suction = 1.0 * dist_com_to_center.pow(2).squeeze() # Reduced weight
+            e_suction = 2.0 * dist_com_to_center.pow(2).squeeze() # Calibrated at 2.0 for Phase 1
 
             # [v61.9 Fix] Staged Optimization
             if step_progress < 0.3:
