@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v62.1 MaxFlow (ICLR 2026 Golden Calculus Refined - Steel Mold Strategy)"
+VERSION = "v62.2 MaxFlow (ICLR 2026 Golden Calculus Refined - Goldilocks Relaxation Strategy)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -2124,14 +2124,25 @@ class MaxFlowExperiment:
                 loss_cohesion = torch.relu(min_neighbor_dist - 1.6).pow(2).mean()
 
                 # [v62.1 Fix A] Radius of Gyration (Rg) Penalty: Compactness
-                # Forces "Spaghetti" back into "Meatballs" (Compact sphere)
+                # [v62.2 Fix A] Relaxed Mold: Threshold 4.0 -> 5.5, weight 10.0 -> 2.0
                 center_of_mass = pos_L_reshaped.mean(dim=1, keepdim=True)
                 dist_to_com = (pos_L_reshaped - center_of_mass).norm(dim=-1)
                 rg = torch.sqrt(dist_to_com.pow(2).mean(dim=-1))
-                loss_compact = torch.relu(rg - 4.0).pow(2)
+                loss_compact = torch.relu(rg - 5.5).pow(2)
 
-                # Unified Formula: FM + RJF + Semantic + Cohesion + Compactness
-                loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 5.0 * loss_cohesion + 10.0 * loss_compact.mean()
+                # [v62.2 Fix B] Pocket Magnet: Spatial Guidance in Stage 1
+                loss_magnet = torch.tensor(0.0, device=device)
+                if progress < 0.5:
+                    loss_magnet = (pos_L_reshaped.mean(dim=1) - p_center).norm(dim=-1).mean()
+
+                # [v62.2 Fix C] Bond Expansion: Prevent Over-compression
+                # If nearest neighbor < 1.4A,施加推力把它推回 1.5A
+                loss_expansion = torch.relu(1.5 - min_neighbor_dist).pow(2).mean()
+
+                # Unified Formula: FM + RJF + Semantic + Cohesion + Compactness + Magnet + Expansion
+                loss = (loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 
+                        5.0 * loss_cohesion + 2.0 * loss_compact.mean() + 
+                        5.0 * loss_magnet + 20.0 * loss_expansion)
 
                 # [v59.5 Fix] NaN Sentry inside the loop
                 # Check for NaNs immediately after backward
