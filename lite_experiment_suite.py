@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v70.0 MaxFlow (ICLR 2026 Golden Calculus Zenith - The Master Key Strategy)"
+VERSION = "v70.3 MaxFlow (ICLR 2026 Ultimate Zenith - Stability Patch)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -449,14 +449,15 @@ class PhysicsEngine:
             is_C_P = x_P[..., 0] # (B, M)
             mask_cc = is_C_L.unsqueeze(2) * is_C_P.unsqueeze(1) # (B, N, M)
             e_hsa_pair = -1.0 * mask_cc * torch.exp(-(dist - 4.0).pow(2) / 0.5)
-            e_hsa = e_hsa_pair.sum(dim=(1, 2)) # (B,)
+            # [v70.3] Stability: nan_to_num for HSA
+            e_hsa = torch.nan_to_num(e_hsa_pair.sum(dim=(1, 2)), nan=0.0) # (B,)
         
         # [v64.0 Fix C] Physics Revert: Removing v63.x Spike and Artifact terms.
         # We return to the stable soft-potential baseline and fix the blind spot in bonds instead.
             
             # Final Energy Synthesis
             # [v70.0] Include HSA reward (Weight 5.0)
-            return e_soft + nuclear_repulsion + e_suction + 5.0 * e_hsa, torch.zeros_like(e_soft), self.current_alpha
+            return e_soft + nuclear_repulsion + e_suction + 5.0 * e_hsa, e_pauli, self.current_alpha
 
     # --- SECTION 4: SCIENTIFIC METRICS (ICLR RIGOUR) ---
     def calculate_valency_loss(self, pos_L, x_L):
@@ -664,7 +665,9 @@ class RealPDBFeaturizer:
                 token_representations = results["representations"][33]
             
             # [v55.2] Remove start/end tokens & Ensure Float Precision for Backbone compatibility
-            return token_representations[0, 1 : len(sequence) + 1].float().cpu()
+            # [v70.3 Stability Patch] Nano-Sentry: Force NaN to Num
+            feat = token_representations[0, 1 : len(sequence) + 1].float().cpu()
+            return torch.nan_to_num(feat, nan=0.0)
         except Exception as e:
             logger.error(f"❌ [PLaTITO] Dynamic Computation Failed: {e}")
             return None
@@ -2318,6 +2321,12 @@ class MaxFlowExperiment:
                 v_target = -torch.autograd.grad(total_energy.sum(), pos_L_reshaped, create_graph=True)[0]
                 
                 # Unified Formula: FM + RJF + Semantic + Anchor (No Traction)
+                # [v70.3 Stability Patch] Individual Nan-Sentry Guards
+                loss_fm = torch.nan_to_num(loss_fm, nan=10.0)
+                jacob_reg = torch.nan_to_num(jacob_reg, nan=0.0)
+                loss_semantic = torch.nan_to_num(loss_semantic, nan=0.0)
+                drift_loss = torch.nan_to_num(drift_loss, nan=0.0)
+                
                 loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 100000.0 * drift_loss
 
                 # [v59.5 Fix] NaN Sentry inside the loop
