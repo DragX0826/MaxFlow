@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v70.7 MaxFlow (ICLR 2026 - DataParallel Fix)"
+VERSION = "v70.8 MaxFlow (ICLR 2026 - DataParallel Signature fix)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -1190,6 +1190,7 @@ class RectifiedFlow(nn.Module):
         self.model = velocity_model
         
     def forward(self, data, t, pos_L, x_L, x_P, pos_P):
+        # [v70.8] Positional Forward for DataParallel Robustness
         out = self.model(data, t, pos_L, x_L, x_P, pos_P)
         # Handle dictionary output for internal optimization
         if isinstance(out, dict):
@@ -2222,8 +2223,10 @@ class MaxFlowExperiment:
                     x_P_rep = x_P_sub.unsqueeze(0).repeat(B, 1, 1)
                     pos_P_rep = pos_P_sub.unsqueeze(0).repeat(B, 1, 1)
                     
-                    # [v70.7] Explicitly pass x_L so DataParallel can split it
-                    out = model(data, t=t_input, pos_L=pos_L, x_L=data.x_L, x_P=x_P_rep, pos_P=pos_P_rep)
+                    # [v70.8] Use ALL POSITIONAL arguments for DataParallel
+                    # This is the most robust way to ensure torch.nn.DataParallel 
+                    # splits every tensor along dim=0 (B) correctly.
+                    out = model(data, t_input, pos_L, data.x_L, x_P_rep, pos_P_rep)
                     v_pred = out['v_pred'].view(B, N, 3)
                     s_current = out['latent'] 
                 
