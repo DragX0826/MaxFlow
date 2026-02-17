@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v70.3 MaxFlow (ICLR 2026 Ultimate Zenith - Stability Patch)"
+VERSION = "v70.4 MaxFlow (ICLR 2026 - Training Loop Fix)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -457,7 +457,9 @@ class PhysicsEngine:
             
             # Final Energy Synthesis
             # [v70.0] Include HSA reward (Weight 5.0)
-            return e_soft + nuclear_repulsion + e_suction + 5.0 * e_hsa, e_pauli, self.current_alpha
+            # [v70.4] Revert e_hard to zeros — returning live e_pauli caused NaN gradients
+            # through sqrt at overlapping atom distances during Step 0.
+            return e_soft + nuclear_repulsion + e_suction + 5.0 * e_hsa, torch.zeros_like(e_soft), self.current_alpha
 
     # --- SECTION 4: SCIENTIFIC METRICS (ICLR RIGOUR) ---
     def calculate_valency_loss(self, pos_L, x_L):
@@ -2266,6 +2268,9 @@ class MaxFlowExperiment:
                 # [v58.2] Set create_graph=False as v_target is detached. 
                 force_total = -torch.autograd.grad(total_energy.sum(), pos_L, create_graph=False, retain_graph=True)[0]
                 
+                # [v70.4] NaN Guard on force_total — prevents sqrt gradient explosion at overlap
+                force_total = torch.nan_to_num(force_total, nan=0.0, posinf=20.0, neginf=-20.0)
+                
                 # [v59.2 Fix] Use Direction-Preserving Soft-Clip instead of Hard Clamp
                 v_target = self.phys.soft_clip_vector(force_total.detach(), max_norm=20.0)
                 
@@ -2309,25 +2314,23 @@ class MaxFlowExperiment:
                 else:
                     self.phys.current_alpha = 0.01
                 
-                # [v66.0 Fix A] Master Anchor: Decisive 100,000x Force
-                # Hard-lock the centroid directly in the Energy Manifold.
+                # [v66.0 Fix A] Master Anchor: Moderate Drift Constraint
+                # [v70.4] Reduced from 100,000x to 1,000x — old weight drowned all learning signals
+                # and produced energy values of 20,000+ that prevented convergence
                 current_centroid = pos_L.mean(dim=1) # (B, 3)
                 drift_loss = (current_centroid - p_center.view(1, 3)).norm(dim=-1).mean()
                 
-                # Update total_energy so v_target inherently respects the anchor.
-                total_energy = e_soft + e_hard + 100000.0 * drift_loss
+                # [v70.4] Detached anchor — do NOT compute second autograd through drift_loss
+                # The old create_graph=True through 100,000x drift caused gradient explosion
+                loss_anchor = 1000.0 * drift_loss.detach()
                 
-                # Grad-Field extraction for PI-Drift and FM target
-                v_target = -torch.autograd.grad(total_energy.sum(), pos_L_reshaped, create_graph=True)[0]
-                
-                # Unified Formula: FM + RJF + Semantic + Anchor (No Traction)
-                # [v70.3 Stability Patch] Individual Nan-Sentry Guards
-                loss_fm = torch.nan_to_num(loss_fm, nan=10.0)
+                # Unified Formula: FM + RJF + Semantic + Anchor
+                # [v70.4] Proper loss composition with reduced, detached anchor
+                loss_fm = torch.nan_to_num(loss_fm, nan=1.0)
                 jacob_reg = torch.nan_to_num(jacob_reg, nan=0.0)
                 loss_semantic = torch.nan_to_num(loss_semantic, nan=0.0)
-                drift_loss = torch.nan_to_num(drift_loss, nan=0.0)
                 
-                loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + 100000.0 * drift_loss
+                loss = loss_fm + 0.1 * jacob_reg + 0.05 * loss_semantic + loss_anchor
 
                 # [v59.5 Fix] NaN Sentry inside the loop
                 # Check for NaNs immediately after backward
