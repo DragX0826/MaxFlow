@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v71.1 MaxFlow (ICLR 2026 - Multi-GPU Refinement)"
+VERSION = "v71.2 MaxFlow (ICLR 2026 - Atomic Synchrony)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -63,9 +63,20 @@ logger = logging.getLogger("MaxFlowv21")
 
 # [SCALING] ICLR Production Mode logic (controlled via CLI now)
 # Default seed for reproducibility
-torch.manual_seed(2025)
-np.random.seed(2025)
-random.seed(2025)
+SEED = 2025
+torch.manual_seed(SEED)
+torch.cuda.manual_seed_all(SEED)
+np.random.seed(SEED)
+random.seed(SEED)
+
+# [v71.2 Atomic Synchrony] Force Deterministic Backends
+# This ensures that CUDA kernels (like cdist, scatter) behave consistently.
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+# Handle non-deterministic Ops with a warning instead of error
+try:
+    torch.use_deterministic_algorithms(True, warn_only=True)
+except: pass
 
 # --- SECTION 1: KAGGLE DEPENDENCY AUTO-INSTALLER ---
 def auto_install_deps():
