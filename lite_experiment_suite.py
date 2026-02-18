@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v72.3 MaxFlow (ICLR 2026 - Atomic Hotfix Synchrony)"
+VERSION = "v72.4 MaxFlow (ICLR 2026 - Atomic Performance Sync)"
 
 # --- GLOBAL ESM SINGLETON (v49.0 Zenith) ---
 _ESM_MODEL_CACHE = {}
@@ -2708,7 +2708,7 @@ class MaxFlowExperiment:
         # Save Outputs
         # [v71.5] Speed Metric for Pareto plotting
         duration = time.time() - start_time
-        speed = steps / duration if duration > 0 else 0.0
+        speed = self.config.steps / duration if duration > 0 else 0.0
         
         result_data = {
             'name': f"{self.config.target_name}_{'Muon' if self.config.use_muon else 'Adam'}",
@@ -2969,8 +2969,8 @@ if __name__ == "__main__":
     parser.add_argument("--redocking", action="store_true", help="Enable SOTA Benchmark Protocol (Pocket-Aware Redocking)")
     args = parser.parse_args()
     
-    # [v72.0] Synchronize MCMC steps with baseline success
-    mcmc_steps = 8000 if args.steps > 1000 else 4000
+    # [v72.4] Synchronize MCMC steps with baseline success (Inclusive threshold)
+    mcmc_steps = 8000 if args.steps >= 1000 else 4000
 
     all_results = []
     all_histories = {} 
