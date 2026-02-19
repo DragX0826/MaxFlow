@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v83.0 alpha MaxFlow (TTA + Publication Figures)"
+VERSION = "v86.0 alpha MaxFlow (Scientific Integrity Pass)"
 
 # Development History Summary:
 # v79.x - Multi-GPU (DataParallel) and Memory Broadcasting hardening.
@@ -237,7 +237,6 @@ class SimulationConfig:
     pdb_id: str
     target_name: str
     steps: int = 300 # [v48.0 Kaggle Hardening]
-    batch_size: int = 16 # [v48.0 Kaggle Hardening]
     lr: float = 1e-3
     temp_start: float = 1.0
     temp_end: float = 0.1
@@ -1129,11 +1128,11 @@ class PairGeometryEncoder(nn.Module):
         
         return self.out_proj(h_L_updated).view(B*N, -1)
 
-# --- SECTION 6: GEOMETRIC GENERATIVE POLICY (RJF) ---
-class RiemannianFlowHead(nn.Module):
+# --- SECTION 6: GEOMETRIC GENERATIVE POLICY (Flow Matching) ---
+class GeodesicFlowHead(nn.Module):
     """
-    [RJF] Riemannian Flow Matching Head.
-    Predicts tangent vectors on the manifold geodesics.
+    [v86.0] Geodesic Flow Matching Head.
+    Predicts tangent vectors for structure refinement.
     """
     def __init__(self, hidden_dim):
         super().__init__()
@@ -1288,7 +1287,8 @@ class GatedRecurrentFlow(nn.Module):
         return self.out_proj(out)
 
 # 5. Recurrent Geometric Flow (RGF) 
-# Formerly Mamba-3 SSD Hybrid - Rebranded for academic integrity and clarity.
+# Formerly Gated Recurrent Flow - Rebranded for academic integrity and clarity.
+# Current Implementation: Bidirectional Gated Recurrent Unit (Bi-GRU).
 class MaxFlowBackbone(nn.Module):
     """
     [v77.0 Audit] Recursive Geometric Flow (RGF) Backbone.
@@ -1324,7 +1324,7 @@ class MaxFlowBackbone(nn.Module):
             # Recursive Geometric Flow (RGF) Implementation
             self.recurrent_flow = GatedRecurrentFlow(hidden_dim)
         
-        self.rjf_head = RiemannianFlowHead(hidden_dim)
+        self.rjf_head = GeodesicFlowHead(hidden_dim)
         
         # [Surgery 5] One-Step FB Head
         self.fb_head = nn.Sequential(
@@ -2107,7 +2107,7 @@ class PublicationVisualizer:
                        marker='*', edgecolors='black', zorder=5, label='Global Minimum')
             ax.set_xlabel('Reaction Coordinate (Generalized)', fontweight='bold')
             ax.set_ylabel('Free Energy (kcal/mol)', fontweight='bold')
-            ax.set_title('Figure 0: MaxFlow — Physics-Guided Flow Through Energy Barriers', fontweight='bold')
+            ax.set_title('Figure 0: MaxFlow — Physics-Guided Flow Matching Through Energy Barriers', fontweight='bold')
             ax.legend(loc='upper left', fontsize=9)
             ax.grid(True, linestyle=':', alpha=0.3)
             sns.despine()
@@ -2121,7 +2121,7 @@ class PublicationVisualizer:
 # --- SECTION 8: MAIN EXPERIMENT SUITE ---
 class MaxFlowExperiment:
     """
-    [v82.0] Resource-Efficient Test-Time Adaptation (TTA) for Molecular Docking.
+    [v86.0] Resource-Efficient Test-Time Adaptation (TTA) for Molecular Docking.
     Optimizes generated poses using physics-guided flow matching and stochastic refinement.
     Designed for deployment in compute-constrained environments (Kaggle T4).
     """
@@ -2135,6 +2135,7 @@ class MaxFlowExperiment:
         ff_params.softness_end = config.softness_end
         # [v70.2] Pass ablation flags to physics engine
         ff_params.no_hsa = config.no_hsa
+        ff_params.no_physics = config.no_physics # [v86.0 Fix] Propagate ablation flag
         self.phys = PhysicsEngine(ff_params)
         # [v63.3 Fix B] Hard Ball Mode: Initialize with ultra-low alpha to refuse overlap
         self.phys.current_alpha = 0.01
@@ -2176,7 +2177,7 @@ class MaxFlowExperiment:
             
         return rmsd
 
-    def export_pymol_script(self, pos_L, pos_native, pdb_id, filename="view_results.pml"):
+    def export_pymol_script(self, pos_L, pos_native, x_L, pdb_id, filename="view_results.pml"):
         """
         [v57.0] Automated PyMOL script generation for 3D overlays.
         Creates a .pml script to visualize champion poses against ground truth.
@@ -2252,9 +2253,8 @@ class MaxFlowExperiment:
             logger.info(f"   🚀 [Lockpicker] Enabling Parallel Physics on {torch.cuda.device_count()} GPUs.")
             phys_dispatcher = nn.DataParallel(phys_dispatcher)
         
-        # [v85.1 Efficiency] Increasing B_mcmc to 128 (leveraged from SPE VRAM savings)
-        # This allows Kaggle to match Local sub-Angstrom (0.x) performance.
-        B_mcmc = 128 
+        # [v86.0 Audit] Standardizing B_mcmc to 64 for T4 stability (prevents OOM)
+        B_mcmc = 64 
         N = best_pos.shape[0]
         com = best_pos.mean(dim=0, keepdim=True)
         pos_centered = best_pos - com 
@@ -2395,7 +2395,8 @@ class MaxFlowExperiment:
                 adaptive_trans_scale = np.clip(adaptive_trans_scale * adj, 0.1, 10.0)
 
             # [v85.1] Last-Mile Freezing: Reduce noise in the final 10% of steps
-            if progress > 0.9:
+            t_progress = step / steps
+            if t_progress > 0.9:
                 adaptive_rot_scale *= 0.5
                 adaptive_trans_scale *= 0.5
                 jiggle_scale *= 0.8
@@ -2435,7 +2436,7 @@ class MaxFlowExperiment:
 
     def run(self):
         start_time = time.time() # [v72.3] Fixed NameError
-        logger.info(f"🚀 Starting Experiment {VERSION} (TSO-Agentic Mode) on {self.config.target_name}...")
+        logger.info(f"🚀 Starting Experiment v86.0 (Scientific Integrity Pass) on {self.config.target_name}...")
         convergence_history = [] 
         steps_to_09 = None 
         steps_to_7 = None
@@ -2554,6 +2555,7 @@ class MaxFlowExperiment:
         # [VISUALIZATION] Step 0 Vector Field (Before Optimization)
         # Run a dummy forward pass to get initial v_pred
         with torch.no_grad():
+            t_0 = torch.zeros(B, device=device) # [v85.5 Fix] Define t_0
             # [v85.0] Use SPE Caching for Step 0 pass
             # [v85.4] Expand h_P to batch size for DataParallel scattering
             h_P_step0 = h_P_full.repeat(B, 1, 1)
@@ -2967,7 +2969,7 @@ class MaxFlowExperiment:
                     self.phys.current_alpha = self.phys.current_alpha * 0.9 + target_alpha_force * 0.1
                 
                 # The Golden Triangle Loss
-                # Pillar 1: Physics-Flow Matching (v58.6: Huber Loss for outlier robustness)
+                # Pillar 1: Structure-Conditioned Flow Matching (SFM)
                 loss_fm = F.huber_loss(v_pred, v_target, delta=1.0)
                 
                 # Pillar 2: Geometric Smoothing (RJF)
@@ -3182,8 +3184,9 @@ class MaxFlowExperiment:
                         
                         # Final Snapshot and generate Trilogy
                         self.export_pymol_script(
-                            pos_for_plot[0].detach().cpu().numpy(),
-                            pos_native.detach().cpu().numpy(),
+                            pos_for_plot[0], # Keep as tensor/parameter for write_pdb
+                            pos_native,      # Keep as tensor
+                            x_L[best_idx],   # [v86.0 Fix] Provide champion latents
                             self.config.pdb_id,
                             filename=f"view_{self.config.target_name}.pml"
                         )
@@ -3639,8 +3642,10 @@ def generate_master_report(experiment_results, all_histories=None):
 
 # --- SECTION 9.5: SCALING BENCHMARK ---
 def run_scaling_benchmark():
-    """Run REAL scaling benchmark for Figure 2 using actual Backbone."""
-    print("📊 Running REAL Scaling Benchmark (Mamba-3 Linear Complexity)...")
+    """
+    [v86.0] Standard Scaling Benchmark (Bi-GRU Complexity Analysis).
+    """
+    print(f"\n🚀 Running REAL Scaling Benchmark (Bi-GRU Linear Complexity)...")
     try:
         atom_counts = [100, 500, 1000, 2000, 4000]
         vram_usage = []
@@ -3725,23 +3730,23 @@ if __name__ == "__main__":
         # [v72.5] honor global high-precision MCMC even in benchmark
         configs = [{"name": "Helix-Flow", "use_muon": True, "no_physics": False, "mcmc_steps": mcmc_steps}]
     elif args.ablation:
-        print("\n🧬 [v70.2] Running Scientific Ablation Suite (Master Key vs Architectural Components)...")
+        print("\n🧬 [v86.0] Running Scientific Ablation Suite (Master Key vs Architectural Components)...")
         targets_to_run = [args.target] 
         args.steps = 500
         args.batch = 16
-        # [v70.2] Formal ICLR Ablation Matrix
+        # [v86.0] Formal ICLR Ablation Matrix
         configs = [
-            {"name": "Full-v70.2", "use_muon": True, "no_physics": False},
+            {"name": "Full-v86.0", "use_muon": True, "no_physics": False},
             {"name": "No-HSA", "use_muon": True, "no_physics": False, "no_hsa": True},
             {"name": "No-Adaptive", "use_muon": True, "no_physics": False, "no_adaptive_mcmc": True},
             {"name": "No-Jiggle", "use_muon": True, "no_physics": False, "no_jiggling": True},
-            {"name": "Baseline-v69.5", "use_muon": True, "no_physics": False, "no_hsa": True, "no_adaptive_mcmc": True, "no_jiggling": True},
+            {"name": "Baseline-Standard", "use_muon": True, "no_physics": False, "no_hsa": True, "no_adaptive_mcmc": True, "no_jiggling": True},
             {"name": "No-Phys", "use_muon": True, "no_physics": True},
             {"name": "AdamW", "use_muon": False, "no_physics": False}
         ]
     else:
         targets_to_run = [args.target]
-        configs = [{"name": "Helix-Flow", "use_muon": True, "no_physics": False}]
+        configs = [{"name": "MaxFlow-v86.0", "use_muon": True, "no_physics": False}]
 
     try:
         for idx, t_name in enumerate(targets_to_run):
@@ -3779,7 +3784,7 @@ if __name__ == "__main__":
                 z.write(f)
             z.write(__file__)
             
-        print(f"\n🏆 {VERSION} Completed (Mathematical Dimensional Reduction).")
+        print(f"\n🏆 {VERSION} Completed (Physical-Neural Unity).")
         print(f"📦 Submission package created: {zip_name}")
         
     except Exception as e:
