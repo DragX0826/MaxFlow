@@ -1,7 +1,0 @@
-Method,Vina_Score_Mean,QED_Mean,Success_Rate,Inference_Time_s
-DiffDock,-7.2,0.45,40,15.2
-MolDiff,-7.5,0.48,55,12.0
-TargetDiff,-7.0,0.42,35,18.5
-Pocket2Mol,-7.4,0.50,60,8.0
-MaxFlow (Ours),-8.5,0.61,88,0.1
-MaxFlow (No-Phys),-8.1,0.48,70,0.1

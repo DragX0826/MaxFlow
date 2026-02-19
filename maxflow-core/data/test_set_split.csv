@@ -1,4 +1,0 @@
-pdb_id,pocket_path,ligand_path
-1a2b,data/pockets/1a2b_pocket.pdb,data/ligands/1a2b_ligand.sdf
-3c4d,data/pockets/3c4d_pocket.pdb,data/ligands/3c4d_ligand.sdf
-5e6f,data/pockets/5e6f_pocket.pdb,data/ligands/5e6f_ligand.sdf
