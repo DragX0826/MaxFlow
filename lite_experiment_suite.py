@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v86.0 alpha MaxFlow (Scientific Integrity Pass)"
+VERSION = "v87.0 alpha MaxFlow (The Honest Restoration)"
 
 # Development History Summary:
 # v79.x - Multi-GPU (DataParallel) and Memory Broadcasting hardening.
@@ -488,28 +488,7 @@ class PhysicsEngine(nn.Module):
             # Return zeros if physics is disabled for ablation
             return torch.zeros(pos_L.shape[0], device=pos_P.device), torch.zeros(pos_L.shape[0], device=pos_P.device), self.current_alpha
         
-        # [v79.0 Memory Hack] Broadcating-Ready Shapes
-        # If pos_P is provided as (1, M, 3), we broadcast against (B, N, 3)
-        # This prevents repeating the protein coordinates B times in MCMC/Inference.
-        if pos_P.size(0) == 1 and pos_L.size(0) > 1:
-            pos_P_aligned = pos_P
-            q_P_aligned = q_P
-            x_P_aligned = x_P
-        else:
-            pos_P_aligned = pos_P
-            q_P_aligned = q_P
-            x_P_aligned = x_P
-            
-        # 1. Soft Physical Potential (Van der Waals + Electrostatics)
-        # diff: (B, N, M, 3)
-        diff = pos_L.unsqueeze(2) - pos_P_aligned.unsqueeze(1) if pos_P_aligned.dim() == 3 else pos_L.unsqueeze(2) - pos_P_aligned.view(1, -1, 3)
-        
-        # [v64.0 Fix C] Physics Revert: Removing v63.x Spike and Artifact terms.
-        # We return to the stable soft-potential baseline and fix the blind spot in bonds instead.
-        
         # Final Energy Synthesis
-        # [v70.0] Include HSA reward (Weight 5.0)
-        # [v85.0] Include Ghost Repulsion
         return e_soft + nuclear_repulsion + e_suction + 5.0 * e_hsa + e_ghost, torch.zeros_like(e_soft), self.current_alpha
 
     # --- SECTION 4: SCIENTIFIC METRICS (ICLR RIGOUR) ---
@@ -1129,9 +1108,9 @@ class PairGeometryEncoder(nn.Module):
         return self.out_proj(h_L_updated).view(B*N, -1)
 
 # --- SECTION 6: GEOMETRIC GENERATIVE POLICY (Flow Matching) ---
-class GeodesicFlowHead(nn.Module):
+class SFMHead(nn.Module):
     """
-    [v86.0] Geodesic Flow Matching Head.
+    [v87.0] Structure-Conditioned Flow Matching (SFM) Head.
     Predicts tangent vectors for structure refinement.
     """
     def __init__(self, hidden_dim):
@@ -1324,7 +1303,7 @@ class MaxFlowBackbone(nn.Module):
             # Recursive Geometric Flow (RGF) Implementation
             self.recurrent_flow = GatedRecurrentFlow(hidden_dim)
         
-        self.rjf_head = GeodesicFlowHead(hidden_dim)
+        self.rjf_head = SFMHead(hidden_dim)
         
         # [Surgery 5] One-Step FB Head
         self.fb_head = nn.Sequential(
@@ -1572,13 +1551,10 @@ class Muon(torch.optim.Optimizer):
                     norm = X.norm() + 1e-7
                     X = X / norm 
                     for _ in range(ns_steps):
-                        # X_{k+1} = 1.5 X_k - 0.5 X_k X_k^T X_k
-                        # Efficient matmul chain
-                        # Correct NS Iteration for Orthogonalization: X(3I - X^T X)/2
-                        # Standard Approximation:
-                        A = X @ X.t()
-                        B = A @ X
-                        X = 1.5 * X - 0.5 * B
+                        # [v87.0 Fix] Standard Newton-Schulz Iteration for Orthogonalization
+                        # X_{k+1} = X_k (1.5 I - 0.5 X_k^T X_k)
+                        A = X.t() @ X
+                        X = 1.5 * X - 0.5 * X @ A
                     
                     update = X.view_as(p) * norm # Scale back? Or keep orthogonal step
                     # Muon uses orthogonal direction directly scaled by LR
@@ -2121,7 +2097,7 @@ class PublicationVisualizer:
 # --- SECTION 8: MAIN EXPERIMENT SUITE ---
 class MaxFlowExperiment:
     """
-    [v86.0] Resource-Efficient Test-Time Adaptation (TTA) for Molecular Docking.
+    [v87.0] Resource-Efficient Test-Time Adaptation (TTA) for Molecular Docking.
     Optimizes generated poses using physics-guided flow matching and stochastic refinement.
     Designed for deployment in compute-constrained environments (Kaggle T4).
     """
@@ -2436,7 +2412,7 @@ class MaxFlowExperiment:
 
     def run(self):
         start_time = time.time() # [v72.3] Fixed NameError
-        logger.info(f"🚀 Starting Experiment v86.0 (Scientific Integrity Pass) on {self.config.target_name}...")
+        logger.info(f"🚀 Starting Experiment v87.0 (The Honest Restoration) on {self.config.target_name}...")
         convergence_history = [] 
         steps_to_09 = None 
         steps_to_7 = None
@@ -2717,6 +2693,15 @@ class MaxFlowExperiment:
                             logger.info("   🔄 Patience Reset. Allowing physics to resolve new clashes.")
                 
                 
+                # [v35.5] Gumbel-Softmax Stability Floor (prevent NaNs in FP16)
+                temp_clamped = max(temp, 0.5)
+                # [v48.0 Mastery] Straight-Through Estimator for Gradient Consistency
+                # Fixing "Soft vs Hard" mismatch: x_L_discrete = hard + soft - soft.detach()
+                x_L_soft = F.softmax(x_L / temp_clamped, dim=-1)
+                x_L_hard = torch.zeros_like(x_L_soft).scatter_(-1, x_L_soft.argmax(dim=-1, keepdim=True), 1.0)
+                x_L_final = (x_L_hard - x_L_soft).detach() + x_L_soft
+                
+                # [v87.0 Fix] Fatal Bug 1: Defining x_L_final before visualization use
                 # [v35.7] ICLR PRODUCTION FIX: Initial Step 0 Vector Field
                 if step == 0:
                     try:
@@ -2727,18 +2712,6 @@ class MaxFlowExperiment:
                                           batch_indices=torch.arange(B, device=device).repeat_interleave(N))
                         self.visualizer.plot_vector_field_2d(pos_L, out_dummy['v_pred'], p_center, filename=f"fig1_vectors_step0.pdf")
                     except: pass
-                
-                # [POLISH] Soft-MaxRL Temperature Annealing (1.0 -> 0.01)
-                # Starts exploratory, ends exploitative (WTA)
-                maxrl_tau = max(1.0 - progress * 0.99, 0.01) 
-                
-                # [v35.5] Gumbel-Softmax Stability Floor (prevent NaNs in FP16)
-                temp_clamped = max(temp, 0.5)
-                # [v48.0 Mastery] Straight-Through Estimator for Gradient Consistency
-                # Fixing "Soft vs Hard" mismatch: x_L_discrete = hard + soft - soft.detach()
-                x_L_soft = F.softmax(x_L / temp_clamped, dim=-1)
-                x_L_hard = torch.zeros_like(x_L_soft).scatter_(-1, x_L_soft.argmax(dim=-1, keepdim=True), 1.0)
-                x_L_final = (x_L_hard - x_L_soft).detach() + x_L_soft
                 
                 # [v70.5] DataParallel requires x_L to have a batch dimension for splitting
                 data.x_L = x_L_final.view(B, N, D)
@@ -2828,14 +2801,15 @@ class MaxFlowExperiment:
                     pos_P_rep = pos_P_sub.unsqueeze(0).repeat(B, 1, 1)
                     
                     # [v82.0] Pre-dispatch Expansion for DataParallel safe splitting
+                    # [v87.0] Ensure B is passed as the scatter dimension
                     x_P_rep = x_P_sub.unsqueeze(0).repeat(B, 1, 1)
                     pos_P_rep = pos_P_sub.unsqueeze(0).repeat(B, 1, 1)
                     
                     # [v71.0] Atomic Orchestration: Use Keywords 
                     # [v85.4] Expand h_P to local batch size B to ensure DP scatter
-                    h_P_batch = h_P_sub.repeat(B, 1, 1) if h_P_sub.dim() == 3 else h_P_sub.unsqueeze(0).repeat(B, 1, 1)
+                    h_P_batch = h_P_sub.unsqueeze(0).repeat(B, 1, 1) if h_P_sub.dim() == 2 else h_P_sub.repeat(B, 1, 1)
                     out = model(t_flow=t_input, pos_L=pos_L, x_L=data.x_L, 
-                                x_P=x_P_rep, pos_P=pos_P_rep, h_P=h_P_batch) # [v85.4] Use B-expanded SPE Cache
+                                x_P=x_P_rep, pos_P=pos_P_rep, h_P=h_P_batch) 
                     
                     # [v77.0 Fix] DataParallel Safety: Infer B from gathered output (Bug 4)
                     v_pred_flat = out['v_pred']
@@ -2907,7 +2881,7 @@ class MaxFlowExperiment:
                         progress, dt_rk4
                     )
                     with torch.no_grad():
-                        pos_L.copy_(new_pos)
+                        pos_L.data.copy_(new_pos)
                 
                 # [v64.1 Fix A] Constant Pressure: w_bond is never zero.
                 # Atoms must fight to expand from Step 0.
@@ -3640,10 +3614,9 @@ def generate_master_report(experiment_results, all_histories=None):
     except Exception as e:
         print(f"Warning: Failed to save LaTeX table: {e}")
 
-# --- SECTION 9.5: SCALING BENCHMARK ---
 def run_scaling_benchmark():
     """
-    [v86.0] Standard Scaling Benchmark (Bi-GRU Complexity Analysis).
+    [v87.0] Standard Scaling Benchmark (Bi-GRU Complexity Analysis).
     """
     print(f"\n🚀 Running REAL Scaling Benchmark (Bi-GRU Linear Complexity)...")
     try:
@@ -3730,13 +3703,13 @@ if __name__ == "__main__":
         # [v72.5] honor global high-precision MCMC even in benchmark
         configs = [{"name": "Helix-Flow", "use_muon": True, "no_physics": False, "mcmc_steps": mcmc_steps}]
     elif args.ablation:
-        print("\n🧬 [v86.0] Running Scientific Ablation Suite (Master Key vs Architectural Components)...")
+        print("\n🧬 [v87.0] Running Scientific Ablation Suite (Master Key vs Architectural Components)...")
         targets_to_run = [args.target] 
         args.steps = 500
         args.batch = 16
-        # [v86.0] Formal ICLR Ablation Matrix
+        # [v87.0] Formal ICLR Ablation Matrix
         configs = [
-            {"name": "Full-v86.0", "use_muon": True, "no_physics": False},
+            {"name": "Full-v87.0", "use_muon": True, "no_physics": False},
             {"name": "No-HSA", "use_muon": True, "no_physics": False, "no_hsa": True},
             {"name": "No-Adaptive", "use_muon": True, "no_physics": False, "no_adaptive_mcmc": True},
             {"name": "No-Jiggle", "use_muon": True, "no_physics": False, "no_jiggling": True},
