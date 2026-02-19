@@ -86,3 +86,13 @@ RuntimeError: Sizes of tensors must match except in dimension 1. Expected size 4
 2026-02-19 23:03:16,100 - MaxFlowv75 - INFO -    [Refinement] Step 500/8000 | New Best Hard Energy: -3.19 | RMSD Penalty: 56.129A
 2026-02-19 23:03:20,054 - MaxFlowv75 - INFO -    [Lockpicker] Final Global Best Hard Energy: -3.19
 2026-02-19 23:03:20,056 - MaxFlowv75 - INFO -    [v69.5 Final Result] MCMC Refined RMSD: 41.73 A
+2026-02-19 23:04:15,365 - MaxFlowv75 - INFO -    >>> Running 1UYD with configuration: MaxFlow-v86.0
+2026-02-19 23:04:36,773 - MaxFlowv75 - INFO -    Running 1 steps of Optimization...
+2026-02-19 23:04:38,234 - MaxFlowv75 - INFO -    Step 000 | E: 2.67 | Alpha: 5.000 | ETA: 0.0m
+2026-02-19 23:04:38,602 - MaxFlowv75 - INFO -    Step 0: Loss=39189.02, E_min=-3.15, Alpha=5.000
+2026-02-19 23:04:39,835 - MaxFlowv75 - INFO -    [Lockpicker] Starting 6D Golden Key MCMC (8000 steps)...
+2026-02-19 23:04:39,850 - MaxFlowv75 - INFO -    [Lockpicker] Initial Hard Energy: -1.93
+2026-02-19 23:04:40,974 - MaxFlowv75 - INFO -    [Refinement] Step 100/8000 | New Best Hard Energy: -2.41 | RMSD Penalty: 36.281A
+2026-02-19 23:04:46,351 - MaxFlowv75 - INFO -    [Lockpicker] Final Global Best Hard Energy: -2.41
+2026-02-19 23:04:46,354 - MaxFlowv75 - INFO -    [v69.5 Final Result] MCMC Refined RMSD: 30.46 A
+2026-02-19 23:04:46,365 - MaxFlowv75 - WARNING -    [Baseline] Vina failed: No module named 'vina'
