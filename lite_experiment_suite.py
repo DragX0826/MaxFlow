@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v88.0 alpha MaxFlow (Precision & Determinism Sync)"
+VERSION = "v89.1 alpha MaxFlow (The Total Honesty Pass)"
 
 # [v88.0] Enforce Determinism for Scientific Parity (CPU vs GPU)
 torch.backends.cudnn.deterministic = True
@@ -268,9 +268,15 @@ class SimulationConfig:
     blind_docking: bool = False # [v75.1] Extra strict flag for ICLR rigor
     mutation_rate: float = 0.0 # [v43.0] For resilience benchmarking
     # [v82.0] Multi-GPU Performance Standards
+    # [v88.0] Multi-GPU Performance Standards
     batch_size: int = 16 # Safe for 16GB VRAM
-    mcmc_steps: int = 4000 # [v85.1 Upgrade] Boosted from 2000 to match Local sub-Angstrom performance
-    accum_steps: int = 4 # Balanced for TTA gradients
+    mcmc_steps: int = 4000 
+    accum_steps: int = 4 
+    # [v88.0] New Precision & Baseline Flags
+    b_mcmc: int = 64
+    fp32: bool = False
+    vina: bool = False
+    target_pdb_path: str = "" # [v89.0 BUG FIX] Ensure this is available for baseline
     # [v40.0] High-flux validation steps
     # [v70.2] Tier-1 Ablation Matrix Flags
     no_hsa: bool = False
@@ -1247,7 +1253,7 @@ class SinusoidalTimeEmbeddings(nn.Module):
 
 # 2. Recurrent Geometric Flow (RGF) Backbone
 # [v46.0 Kaggle Acceleration] Bidirectional GRU 
-# While SSMs like Mamba offer linear scaling, we found that for typical ligand 
+# While recurrent architectures like GRU offer linear scaling, we found that for typical ligand 
 # context lengths (N < 200), a lightweight Bi-GRU backbone provides 
 # superior stability and comparable performance on constrained hardware (Kaggle T4).
 
@@ -1257,7 +1263,7 @@ class GatedRecurrentFlow(nn.Module):
     """
     [v81.0] Gated Recurrent Flow Backbone (GRU-based).
     Optimized for N<200 nodes on Kaggle T4. 
-    Notes: Serves as a surrogate for the S6 core logic.
+    Notes: Implementation uses Bi-GRU for high-fidelity flow matching.
     """
     def __init__(self, d_model, d_state=16, d_conv=4, expand=2):
         super().__init__()
@@ -1282,11 +1288,11 @@ class GatedRecurrentFlow(nn.Module):
 class MaxFlowBackbone(nn.Module):
     """
     [v77.0 Audit] Recursive Geometric Flow (RGF) Backbone.
-    Note: Current implementation uses a Bi-GRU as a surrogate for the SSD (S6) core.
+    Note: Current implementation uses a Bi-GRU core.
     """
-    def __init__(self, node_in_dim, hidden_dim=64, num_layers=4, no_rgf=False):
+    def __init__(self, node_in_dim, hidden_dim=64, num_layers=4, no_rgf=False, force_fp32=False):
         super().__init__()
-        self.perception = StructureSequenceEncoder(hidden_dim=hidden_dim, force_fp32=getattr(config, 'fp32', False))
+        self.perception = StructureSequenceEncoder(hidden_dim=hidden_dim, force_fp32=force_fp32)
         self.cross_attn = GVPAdapter(hidden_dim)
         
         self.embedding = nn.Linear(node_in_dim, hidden_dim)
@@ -1303,7 +1309,7 @@ class MaxFlowBackbone(nn.Module):
         
         # [v76.1 Fix] GVP Dimension Alignment (Bug 6)
         # Using 1 vector channel as the position prior. 
-        # Note: Bi-GRU HighFlux serves as a surrogate for the SSD (S6) core.
+        # Note: Bi-GRU HighFlux serves as the core reasoning engine.
         self.gvp_layers = nn.ModuleList()
         curr_dims = (hidden_dim, 1) # s, vi=1
         for _ in range(num_layers):
@@ -3448,10 +3454,15 @@ class MaxFlowExperiment:
         result_entry['RMSD'] = f"{best_rmsd:.2f}"
         result_entry['Binding Pot.'] = f"{best_overall_E:.2f}" # Best hard energy from MCMC
         
+        # [v89.0 Fix] Reconstruct Native Mol if missing for Vina comparison
+        mol_native = reconstruct_mol_from_points(pos_native.cpu().numpy(), None)
+        
         # [v88.0] Optional Vina Baseline Integration
         if getattr(self.config, 'vina', False):
             logger.info("   🧪 [Baseline] Running AutoDock Vina Comparison...")
-            vina_res = VinaBaseline.run(f"{self.config.target_pdb_path}", mol_native, p_center.cpu().numpy())
+            # [v89.0 Fix] Explicit path and native mol check
+            pdb_path = f"{self.config.pdb_id}.pdb"
+            vina_res = VinaBaseline.run(pdb_path, mol_native, p_center.cpu().numpy())
             if vina_res['vina_success']:
                 result_entry['Vina Energy'] = f"{vina_res['vina_energy']:.2f}"
                 logger.info(f"   [Baseline] Vina Energy: {vina_res['vina_energy']:.2f}")
@@ -3705,7 +3716,7 @@ def run_scaling_benchmark():
             print(f"   N={n}: Peak VRAM = {peak_vram:.2f} GB")
             
         plt.figure(figsize=(8, 6))
-        plt.plot(atom_counts, vram_usage, 's-', color='tab:green', linewidth=2, label='Helix-Flow (Mamba-3 SSD)')
+        plt.plot(atom_counts, vram_usage, 's-', color='tab:green', linewidth=2, label='Helix-Flow (Bi-GRU Backbone)')
         # Add a quadratic line for comparison (Transformer baseline)
         if len(vram_usage) > 1:
             baseline = [vram_usage[0] * (n/atom_counts[0])**2 for n in atom_counts]
@@ -3714,7 +3725,7 @@ def run_scaling_benchmark():
         plt.xlabel("Number of Atoms (N)")
         plt.ylabel("Peak VRAM (GB)")
         plt.yscale('log')
-        plt.title("Figure 2: Linear Complexity Proof (Mamba-3 SSD)")
+        plt.title("Figure 2: Linear Complexity Proof (Bi-GRU Backbone)")
         plt.axvline(1500, color='gray', linestyle='-.', alpha=0.5)
         plt.annotate('Human Kinase Pocket (~1500 atoms)', xy=(1500, vram_usage[2]), xytext=(1700, vram_usage[2]*2),
                      arrowprops=dict(facecolor='black', shrink=0.05))
@@ -3792,8 +3803,12 @@ if __name__ == "__main__":
                     batch_size=args.batch,
                     use_muon=cfg['use_muon'],
                     no_physics=cfg['no_physics'],
-                    redocking=args.redocking, # [v61.1] Formalized SOTA Protocol
-                    mcmc_steps=cfg.get('mcmc_steps', 8000), # [v70.1]
+                    redocking=args.redocking,
+                    b_mcmc=args.b_mcmc,
+                    fp32=args.fp32,
+                    vina=args.vina,
+                    target_pdb_path=f"{t_name}.pdb",
+                    mcmc_steps=cfg.get('mcmc_steps', 8000), 
                     no_hsa=cfg.get('no_hsa', False),
                     no_adaptive_mcmc=cfg.get('no_adaptive_mcmc', False),
                     no_jiggling=cfg.get('no_jiggling', False)

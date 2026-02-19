@@ -1,0 +1,4 @@
+1256:# While SSMs like Mamba offer linear scaling, we found that for typical ligand 
+1266:    Notes: Serves as a surrogate for the S6 core logic.
+1291:    Note: Current implementation uses a Bi-GRU as a surrogate for the SSD (S6) core.
+1312:        # Note: Bi-GRU HighFlux serves as a surrogate for the SSD (S6) core.
