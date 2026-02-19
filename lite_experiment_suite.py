@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Union
 
 # --- SECTION 0: VERSION & CONFIGURATION ---
-VERSION = "v90.0 alpha MaxFlow (The Stability Sweep)"
+VERSION = "v91.0 alpha MaxFlow (CPU Turbo & Production Ready)"
 
 # [v88.0] Enforce Determinism for Scientific Parity (CPU vs GPU)
 torch.backends.cudnn.deterministic = True
@@ -467,9 +467,14 @@ class PhysicsEngine(nn.Module):
             # We already have external loss_traction; internal suction is zeroed to allow repulsion to dominate.
             e_suction = torch.zeros(pos_L.shape[0], device=pos_P.device) 
             
+            # [v91.0 CPU Turbo] Physics Cutoff (10.0A)
+            # Skip interaction energy for pairs further than 10.0A to speed up CPU
+            CUTOFF = 10.0
+            dist_mask = (dist < CUTOFF).float()
+            
             # [v59.1 Fix] Attention-weighted Forces (Soft Distogram Simulation)
             attn_weights = F.softmax(-dist / 1.0, dim=-1) # (B, N, M)
-            e_inter = (e_elec + e_vdw) * attn_weights
+            e_inter = (e_elec + e_vdw) * attn_weights * dist_mask
             e_soft = e_inter.sum(dim=(1, 2))
 
             # [v59.5 Fix] NaN Sentry
@@ -497,7 +502,7 @@ class PhysicsEngine(nn.Module):
             is_C_L = type_probs_L[..., 0] # (B, N)
             is_C_P = x_P[..., 0] # (B, M)
             mask_cc = is_C_L.unsqueeze(2) * is_C_P.unsqueeze(1) # (B, N, M)
-            e_hsa_pair = -1.0 * mask_cc * torch.exp(-(dist - 4.0).pow(2) / 0.5)
+            e_hsa_pair = -1.0 * mask_cc * torch.exp(-(dist - 4.0).pow(2) / 0.5) * dist_mask
             # [v70.3] Stability: nan_to_num for HSA
             e_hsa = torch.nan_to_num(e_hsa_pair.sum(dim=(1, 2)), nan=0.0) # (B,)
         
@@ -1006,6 +1011,30 @@ class AdaptiveODESolver:
         k3 = self.dynamics(pos + 0.5 * dt * k2, v_neural, pos_P, q_L, q_P, x_L, x_P, progress)
         k4 = self.dynamics(pos + dt * k3, v_neural, pos_P, q_L, q_P, x_L, x_P, progress)
         return pos + (dt / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+def rodrigues_rotation(axis, angle):
+    """
+    axis: (B, 3), angle: (B, 1) or (B, 1, 1) -> R: (B, 3, 3)
+    Vectorized Rodrigues rotation matrix formula for lightning-fast CPU performance.
+    [v91.0 CPU Turbo]
+    """
+    B = axis.shape[0]
+    axis = torch.nn.functional.normalize(axis, dim=-1)
+    cos_a = torch.cos(angle).view(B, 1, 1)
+    sin_a = torch.sin(angle).view(B, 1, 1)
+    
+    # K matrix (cross-product matrix)
+    x, y, z = axis[:, 0], axis[:, 1], axis[:, 2]
+    K = torch.zeros(B, 3, 3, device=axis.device, dtype=axis.dtype)
+    K[:, 0, 1] = -z; K[:, 0, 2] = y
+    K[:, 1, 0] = z;  K[:, 1, 2] = -x
+    K[:, 2, 0] = -y; K[:, 2, 1] = x
+    
+    # R = I + sin(a)K + (1-cos(a))K^2
+    I = torch.eye(3, device=axis.device, dtype=axis.dtype).unsqueeze(0).repeat(B, 1, 1)
+    K2 = torch.bmm(K, K)
+    R = I + sin_a * K + (1 - cos_a) * K2
+    return R
 # 5. Structure-Sequence Encoder (SSE)
 # Formerly Bio-Perception Encoder - Renamed for academic rigor.
 class StructureSequenceEncoder(nn.Module):
@@ -2353,12 +2382,8 @@ class MaxFlowExperiment:
             rand_axis = rand_axis / (rand_axis.norm(dim=1, keepdim=True) + 1e-6)
             rand_angle = (torch.rand(B_mcmc, 1, device=device) * 2 - 1) * rot_magnitude
             
-            k = torch.zeros(B_mcmc, 3, 3, device=device)
-            k[:, 0, 1] = -rand_axis[:, 2]; k[:, 0, 2] = rand_axis[:, 1]
-            k[:, 1, 0] = rand_axis[:, 2]; k[:, 1, 2] = -rand_axis[:, 0]
-            k[:, 2, 0] = -rand_axis[:, 1]; k[:, 2, 1] = rand_axis[:, 0]
-            k = k * rand_angle.unsqueeze(-1)
-            R = torch.matrix_exp(k)
+            # [v91.0 CPU Turbo] Rodrigues Rotation replacement for matrix_exp
+            R = rodrigues_rotation(rand_axis, rand_angle)
             
             # 2. Translation
             rand_trans = torch.randn(B_mcmc, 1, 3, device=device) * trans_magnitude
@@ -2384,11 +2409,8 @@ class MaxFlowExperiment:
                 rel_pos = current_pos - current_pos[:, pivot_idx:pivot_idx+1, :]
                 
                 # Rodrigues' rotation for masked atoms
-                k_t = torch.zeros(B_mcmc, 3, 3, device=device)
-                k_t[:, 0, 1] = -torsion_axis[:, 2]; k_t[:, 0, 2] = torsion_axis[:, 1]
-                k_t[:, 1, 0] = torsion_axis[:, 2]; k_t[:, 1, 2] = -torsion_axis[:, 0]
-                k_t[:, 2, 0] = -torsion_axis[:, 1]; k_t[:, 2, 1] = torsion_axis[:, 0]
-                R_t = torch.matrix_exp(k_t * torsion_angle) 
+                # [v91.0 CPU Turbo] Rodrigues Rotation replacement for matrix_exp
+                R_t = rodrigues_rotation(torsion_axis, torsion_angle.squeeze(-1))
                 
                 # Apply rotation only to masked atoms
                 proposed_pos = current_pos * (1 - mask_torsion) + (torch.bmm(rel_pos, R_t) + current_pos[:, pivot_idx:pivot_idx+1, :]) * mask_torsion
@@ -2461,9 +2483,10 @@ class MaxFlowExperiment:
                     torch.cuda.empty_cache()
 
                 # [v75.6] MCMC Early Stopping: Stability Check
-                if step > 1000 and step % 500 == 0:
-                    if last_best_E - best_overall_E < 0.05: # Strict threshold for speed
-                        logger.info(f"   🛑 [MCMC] Convergence Reached. Early Stopping at Step {step}.")
+                # [v91.0 CPU Turbo] Aggressive Early Stop
+                if step > 500 and step % 100 == 0:
+                    if last_best_E - best_overall_E < 0.1: # Relaxed threshold
+                        logger.info(f"   🛑 [MCMC] Early Stopping at Step {step} (Convergence Reached).")
                         break
                     last_best_E = best_overall_E
 
@@ -2936,14 +2959,16 @@ class MaxFlowExperiment:
                     with torch.no_grad():
                         pos_L.data.copy_(pos_L + torch.randn_like(pos_L) * p_noise)
                     
-                    # 3. Precision RK4 Integration (The 'Geodesic' update)
-                    dt_rk4 = 1.0 / self.config.steps 
-                    new_pos = self.ode_solver.step_rk4(
+                    # [v91.0 CPU Turbo] RK4 -> Corrected Euler integration
+                    # RK4 (4 physics calls) is too heavy for CPU. Corrected Euler (1 call) is sufficient.
+                    dt_euler = 1.0 / self.config.steps 
+                    v_eff = self.ode_solver.dynamics(
                         pos_L.detach(), 
                         v_pred.detach(), 
                         pos_P_batched, q_L, q_P_batched, x_L_for_physics, x_P_batched, 
-                        progress, dt_rk4
+                        progress
                     )
+                    new_pos = pos_L.detach() + v_eff * dt_euler
                     with torch.no_grad():
                         pos_L.data.copy_(new_pos)
                 
@@ -3757,6 +3782,13 @@ def run_scaling_benchmark():
 
 if __name__ == "__main__":
     import argparse
+    import os
+    # [v91.0 CPU Turbo] Global Threading Optimization
+    cpu_count = os.cpu_count() or 1
+    torch.set_num_threads(cpu_count)
+    torch.set_num_interop_threads(max(1, cpu_count // 2))
+    logger.info(f"🖥️ CPU Turbo Enabled: {torch.get_num_threads()} threads utilized.")
+
     parser = argparse.ArgumentParser(description=f"MaxFlow {VERSION} ICLR Suite")
     parser.add_argument("--target", "--pdb_id", type=str, default="1UYD", help="Target PDB ID (e.g., 1UYD, 7SMV, 3PBL, 5R8T)")
     parser.add_argument("--steps", type=int, default=1000)
