@@ -1379,22 +1379,29 @@ class MaxFlowBackbone(nn.Module):
 
         # [v80.0 Precision] Protein Structure-Sequence Embedding
         # Handled by ESM-2 and GVP spatial priors.
-        # [v85.4 Fix] Correct Slicing for (1, M, 3) Protein
-        # In DataParallel/SPE mode, pos_P is [1, M, 3]. Slicing must target dim 1.
-        n_p_limit = min(200, pos_P.size(1))
-        pos_P_sub = pos_P[0, :n_p_limit] # Squeeze to 2D [M_sub, 3] for internal ops
-        x_P_sub = x_P[0, :n_p_limit]     # Squeeze to 2D [M_sub, D]
+        # [v85.4 Precision] Protein Harmonization for DataParallel
+        # [v85.4 Fix] DataParallel scatters kwargs. Protein must be 2D within the GPU-local pass.
+        if pos_P.dim() == 3:
+            # Replicated or Scattered [B_local, M, 3]
+            pos_P_sub = pos_P[0, :min(200, pos_P.size(1))]
+            x_P_sub = x_P[0, :min(200, x_P.size(1))]
+        else:
+            # Standard [M, 3]
+            n_p_limit = min(200, pos_P.size(0))
+            pos_P_sub = pos_P[:n_p_limit]
+            x_P_sub = x_P[:n_p_limit]
 
         # 1. Bio-Perception (PLaTITO)
         # [v85.0 SPE Caching] If pre-computed h_P is provided, skip perception
         if h_P is not None:
-            # h_P should be [M, H] or [1, M, H]
-            if h_P.dim() == 3: h_P = h_P.squeeze(0)
-            # Slice h_P to match x_P_sub if needed (though usually h_P is already sliced)
-            h_P = h_P[:n_p_limit]
+            # h_P should be [M, H] or [B_local, M, H] (from DP scatter)
+            if h_P.dim() == 3: 
+                h_P = h_P[0] # Take first slice for broadcasting
+            # Slice h_P to match x_P_sub if needed
+            h_P = h_P[:pos_P_sub.size(0)]
         else:
             h_P = self.perception(x_P_sub)
-            if h_P.dim() == 3: h_P = h_P.squeeze(0) # Ensure 2D [M_sub, H] consistency
+            if h_P.dim() == 3: h_P = h_P[0]
         
         h_P = self.proj_P(h_P)
         
@@ -1413,9 +1420,11 @@ class MaxFlowBackbone(nn.Module):
         M_val = pos_P_sub.size(0) 
         
         pos_L_b = pos_L_flat.view(B_val, N_val, 3)
-        # [v75.9 Fix] Repeat protein for each ligand in the batch for cross-attention (Bug 6)
+        # [v85.4 Mastery] pos_P_sub is now guaranteed 2D [M_sub, 3]
         pos_P_b = pos_P_sub.unsqueeze(0).repeat(B_val, 1, 1)
-        h_P_b = h_P.unsqueeze(0).repeat(B_val, 1, 1)
+        # Ensure h_P matches layer device (Audit Fix 85.4)
+        h_P_device = self.proj_P.weight.device
+        h_P_b = h_P.to(h_P_device).unsqueeze(0).repeat(B_val, 1, 1)
         
         # Cross-Attention via Pair Encoding
         h_pair = self.pair_encoder(pos_L_flat, pos_P_sub, s_L, h_P, batch_local)
@@ -2545,9 +2554,10 @@ class MaxFlowExperiment:
         # [VISUALIZATION] Step 0 Vector Field (Before Optimization)
         # Run a dummy forward pass to get initial v_pred
         with torch.no_grad():
-            t_0 = torch.zeros(B, device=device)
             # [v85.0] Use SPE Caching for Step 0 pass
-            out_0 = model(t_flow=t_0, pos_L=pos_L, x_L=x_L, x_P=x_P, pos_P=pos_P, h_P=h_P_full)
+            # [v85.4] Expand h_P to batch size for DataParallel scattering
+            h_P_step0 = h_P_full.repeat(B, 1, 1)
+            out_0 = model(t_flow=t_0, pos_L=pos_L, x_L=x_L, x_P=x_P, pos_P=pos_P, h_P=h_P_step0)
             v_0 = out_0['v_pred']
             # Plot
             self.visualizer.plot_vector_field_2d(pos_L, v_0, p_center, filename=f"fig1_vectors_step0.pdf")
@@ -2820,8 +2830,10 @@ class MaxFlowExperiment:
                     pos_P_rep = pos_P_sub.unsqueeze(0).repeat(B, 1, 1)
                     
                     # [v71.0] Atomic Orchestration: Use Keywords 
+                    # [v85.4] Expand h_P to local batch size B to ensure DP scatter
+                    h_P_batch = h_P_sub.repeat(B, 1, 1) if h_P_sub.dim() == 3 else h_P_sub.unsqueeze(0).repeat(B, 1, 1)
                     out = model(t_flow=t_input, pos_L=pos_L, x_L=data.x_L, 
-                                x_P=x_P_rep, pos_P=pos_P_rep, h_P=h_P_sub) # [v85.0] Use SPE Cache
+                                x_P=x_P_rep, pos_P=pos_P_rep, h_P=h_P_batch) # [v85.4] Use B-expanded SPE Cache
                     
                     # [v77.0 Fix] DataParallel Safety: Infer B from gathered output (Bug 4)
                     v_pred_flat = out['v_pred']
@@ -2839,11 +2851,11 @@ class MaxFlowExperiment:
                         self.visualizer.plot_vector_field_2d(pos_L, v_pred, p_center, filename=f"fig1_vectors_step200.pdf")
                     except: pass
                 
-                # [v48.1 Stability Hotfix] Reference Model Prediction
                 with torch.no_grad():
-                    # [v85.0] Reference pass using SPE Cache
+                    # [v85.4] Expand h_P for reference pass consistency
+                    h_P_ref = h_P_sub.repeat(B, 1, 1) if h_P_sub.dim() == 3 else h_P_sub.unsqueeze(0).repeat(B, 1, 1)
                     out_ref = model_ref(t_flow=t_input, pos_L=pos_L, 
-                                        x_L=data.x_L, x_P=x_P_rep, pos_P=pos_P_rep, h_P=h_P_sub)
+                                        x_L=data.x_L, x_P=x_P_rep, pos_P=pos_P_rep, h_P=h_P_ref)
                     # [v71.3] Handle potential 3D/2D output from backbone
                     v_ref = out_ref['v_pred']
                     if v_ref.dim() == 2: v_ref = v_ref.view(B, N, 3)
