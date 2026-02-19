@@ -1322,7 +1322,7 @@ class MaxFlowBackbone(nn.Module):
             
         if not no_rgf:
             # Recursive Geometric Flow (RGF) Implementation
-            self.recurrent_flow = HighFluxRecurrentFlow(hidden_dim)
+            self.recurrent_flow = GatedRecurrentFlow(hidden_dim)
         
         self.rjf_head = RiemannianFlowHead(hidden_dim)
         
