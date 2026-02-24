@@ -53,28 +53,57 @@ class ShortcutFlowLoss(nn.Module):
 def pat_step(pos_L, v_pred, f_phys, alpha_ema, confidence, dt):
     """
     Physics-Adaptive Trust (PAT) step.
-    Blends neural flow and physics force based on EMA-smoothed CosSim trust.
+    Blends neural flow and physics force based on EMA-smoothed trust.
     
     Args:
         pos_L: (B, N, 3)
-        v_pred: (B, N, 3)  - Neural direction
+        v_pred: (B, N, 3)  - Neural direction (Å/step)
         f_phys: (B, N, 3)  - Physical force (-grad E)
-        alpha_ema: (B, N, 1) - Current trust weights
-        confidence: (B, N, 1) - Neural confidence
+        alpha_ema: (B, N, 1) - EMA trust weights (includes CosSim + Confidence)
+        confidence: (B, N, 1) - Neural confidence (0 to 1)
         dt: step size
     """
-    # Blend directions based on alpha_ema
-    # 1-alpha is neural trust, alpha is physics trust
-    delta = (1.0 - alpha_ema) * v_pred + alpha_ema * f_phys
-    new_pos = pos_L + delta * dt
+    # Fix Bug 3: Force/Flow Scale Matching
+    # f_phys can be huge or tiny. We scale it to match v_pred magnitude
+    # This prevents physics from drowning out the model gradients or being ignored.
+    v_norm = v_pred.norm(dim=-1, keepdim=True).detach()
+    f_norm = f_phys.norm(dim=-1, keepdim=True)
+    f_phys_scaled = f_phys / (f_norm + 1e-8) * v_norm
+    
+    velocity = (1.0 - alpha_ema) * v_pred + alpha_ema * f_phys_scaled
+    
+    # Fix Bug 2: Confidence Contradiction
+    # Instead of velocity * confidence (which zeros out step if conf=0),
+    # we use a softer scaling that allows for physics-guided exploration even when unsure.
+    step_scale = 0.5 + 0.5 * confidence.detach()  # Range [0.5, 1.0]
+    
+    new_pos = pos_L + velocity * (step_scale * dt)
     return new_pos
 
-def langevin_noise(pos_shape, temperature, dt, device):
-    """Generates Langevin stochastic noise: sqrt(2*T*dt) * N(0,1)"""
+def langevin_noise(pos_shape, temperature, dt, device, x_L=None):
+    """
+    Generates Langevin stochastic noise: sqrt(2*T*dt/m) * N(0,1)
+    Supports mass-weighting based on atom types.
+    """
     if temperature <= 1e-6:
         return torch.zeros(pos_shape, device=device)
+    
     noise = torch.randn(pos_shape, device=device)
-    return torch.sqrt(torch.tensor(2.0 * temperature * dt, device=device)) * noise
+    
+    # Default mass = 1.0 (Hydrogen or generic)
+    mass = torch.ones((pos_shape[0], pos_shape[1], 1), device=device)
+    
+    if x_L is not None:
+        # x_L has [C, N, O, S, F, P, Cl, Br, I] at indices 0-8
+        types = x_L[..., :9] # (B, N, 9)
+        # Atomic masses: C=12, N=14, O=16, S=32, F=19, P=31, Cl=35, Br=80, I=127
+        mass_coeffs = torch.tensor([12.0, 14.0, 16.0, 32.0, 19.0, 31.0, 35.0, 80.0, 127.0], device=device)
+        mass = (types * mass_coeffs).sum(dim=-1, keepdim=True)
+        mass = torch.where(mass > 0, mass, torch.ones_like(mass)) # safety
+    
+    # Fluctuating-Dissipation Theorem: scale = sqrt(2 * T * dt / mass)
+    scale = torch.sqrt(torch.tensor(2.0 * temperature * dt, device=device) / mass)
+    return scale * noise
 
 def shortcut_step(pos_L, v_pred, x1_pred, confidence, t, dt):
     """

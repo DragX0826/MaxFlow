@@ -112,61 +112,66 @@ class PhysicsEngine(nn.Module):
             
             # --- Standard LJ 12-6: 4ε[(σ/r)^12 - (σ/r)^6] ---
             eps_L = torch.relu(type_probs_L @ self.epsilon[:9].float())
-            # Use geometric mean of epsilon for mixed pairs
-            # 0.15 is the avg protein epsilon; add 1e-8 for sqrt stability
             eps_ij = torch.sqrt(eps_L.unsqueeze(-1) * 0.15 + 1e-8)
             
-            # Clamp ratio to prevent Inf^12 - Inf^6 = NaN
-            # A ratio of 5.0 means atoms are 5x closer than equilibrium; force is already massive.
             ratio = sigma_ij / (soft_dist + 1e-8)
             ratio = torch.clamp(ratio, max=5.0) 
             
             ratio6 = ratio.pow(6)
             ratio12 = ratio6.pow(2)
             e_vdw_raw = 4.0 * eps_ij * (ratio12 - ratio6)
-            e_vdw = torch.clamp(e_vdw_raw, min=-10.0, max=500.0)
             
-            # --- Distance cutoff (smooth, no softmax) ---
+            # --- Bug 1 Fix: Smooth Clamping for Gradients ---
+            # Gradient path: use softplus to prevent dead zones while capping extremes
+            # Clipping floor at -10 with softplus mapping
+            e_vdw_grad = F.softplus(e_vdw_raw - (-10.0)) + (-10.0)
+            # Clipping ceiling at 500 with softplus mapping
+            e_vdw_grad = -F.softplus(-(e_vdw_grad - 500.0)) + 500.0
+            
+            # --- Distance cutoff ---
             CUTOFF = 12.0
             dist_mask = torch.sigmoid((CUTOFF - dist) * 2.0)
             
-            e_inter = (e_elec + e_vdw) * dist_mask
-            e_soft = e_inter.sum(dim=(1, 2))
+            e_inter_grad = (e_elec + e_vdw_grad) * dist_mask
+            e_soft = e_inter_grad.sum(dim=(1, 2))
 
-            # --- Pauli Repulsion (quadratic, progress-gated) ---
+            # --- Hydrophobic Solvation Approximation (Moved inside autocast) ---
+            e_hsa = torch.zeros(B, device=pos_L.device)
+            if hasattr(self.params, 'no_hsa') and not self.params.no_hsa:
+                is_C_L = type_probs_L[..., 0]     # carbon probability
+                is_C_P = x_P[..., 0]
+                mask_cc = is_C_L.unsqueeze(2) * is_C_P.unsqueeze(1)
+                hsa_term = 1.0 / (1.0 + (dist / 4.0).pow(4))
+                e_hsa = (-0.5 * mask_cc * hsa_term * dist_mask).sum(dim=(1, 2))
+
+            # --- Pauli Repulsion ---
             t_gate = torch.sigmoid(torch.tensor((step_progress - 0.2) * 10.0, device=pos_L.device))
-            overlap = torch.relu(sigma_ij * 0.6 - dist)  # penetration depth
+            overlap = torch.relu(sigma_ij * 0.6 - dist)
             e_pauli = t_gate * 100.0 * overlap.pow(2).sum(dim=(1, 2))
             
-            # --- Ghost repulsion for early exploration ---
+            # --- Ghost repulsion ---
             if step_progress < 0.15:
                 e_ghost = 500.0 * torch.relu(0.5 - dist).pow(2).sum(dim=(1, 2))
             else:
                 e_ghost = torch.zeros(B, device=pos_L.device)
 
+            # --- Final Combining (Differentiable) ---
+            e_raw = e_soft + 5.0 * e_hsa + e_pauli + e_ghost
+            
             # --- NaN safety ---
-            if torch.isnan(e_soft).any():
-                logger.warning("NaN in soft energy")
-                e_soft = torch.nan_to_num(e_soft, nan=0.0)
+            if torch.isnan(e_raw).any():
+                logger.warning("NaN in raw energy")
+                e_raw = torch.nan_to_num(e_raw, nan=0.0)
 
-        # --- Hydrophobic Solvation Approximation ---
-        e_hsa = torch.zeros(B, device=pos_L.device)
-        if hasattr(self.params, 'no_hsa') and not self.params.no_hsa:
-            is_C_L = type_probs_L[..., 0]     # carbon probability
-            is_C_P = x_P[..., 0]
-            mask_cc = is_C_L.unsqueeze(2) * is_C_P.unsqueeze(1)
-            hsa_term = 1.0 / (1.0 + (dist / 4.0).pow(4))
-            e_hsa = (-0.5 * mask_cc * hsa_term * dist_mask).sum(dim=(1, 2))
-
-        # --- Final Clamping and Combining ---
-        e_raw = e_soft + 5.0 * e_hsa + e_pauli + e_ghost
-        
         # Log energy is clamped for metrics reporting stability
-        e_soft_final = torch.clamp(e_soft + 5.0 * e_hsa, min=-500.0, max=5000.0)
+        # Use a harder clamp for the log to stay in -500..5000 range
+        log_vdw = torch.clamp(e_vdw_raw, min=-10.0, max=500.0)
+        log_soft = ((e_elec + log_vdw) * dist_mask).sum(dim=(1, 2)) + 5.0 * e_hsa
+        
+        e_soft_final = torch.clamp(log_soft, min=-500.0, max=5000.0)
         e_hard_final = torch.clamp(e_pauli + e_ghost, max=10000.0)
         log_energy   = torch.clamp(e_soft_final + e_hard_final, max=1e6)
         
-        # We return e_raw as the PRIMARY energy for gradient calculation
         return e_raw, e_hard_final, self.current_alpha, log_energy
 
     def calculate_valency_loss(self, pos_L, x_L):

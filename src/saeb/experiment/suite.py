@@ -224,11 +224,9 @@ class SAEBFlowExperiment:
                 history_RMSD.append(r_min)
 
             # ── Langevin Temperature Annealing ─────────────────────────────
-            if step < 0.8 * total_steps:
-                prog_noise = step / (0.8 * total_steps)
-                T_curr = 0.5 * self.config.temp_start * (1 + math.cos(math.pi * prog_noise))
-            else:
-                T_curr = 0.0
+            # Bug Fix: Use exponential decay for smoother transition and residual exploration
+            decay_rate = 5.0
+            T_curr = self.config.temp_start * math.exp(-decay_rate * step / total_steps) + 1e-4
 
             # ── PAT: Physics-Adaptive Trust (Magma Inspired) ───────────────
             # Atom-wise CosSim → Tempered Sigmoid → EMA smoothing
@@ -246,7 +244,8 @@ class SAEBFlowExperiment:
 
             # ── PAT + Langevin Combined Position Update ────────────────────
             with torch.no_grad():
-                noise   = langevin_noise(pos_L.shape, T_curr, dt, device)
+                # Bug Fix: Pass x_L for mass-weighted noise
+                noise   = langevin_noise(pos_L.shape, T_curr, dt, device, x_L=x_L)
                 pos_new = pat_step(pos_L, v_pred.detach(), f_phys, alpha_ema, confidence.detach(), dt)
                 pos_L.data.copy_(pos_new + noise)
 
