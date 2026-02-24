@@ -111,15 +111,20 @@ class PhysicsEngine(nn.Module):
             e_elec = (332.06 * q_L_exp * q_P_exp) / (dielectric * soft_dist)
             
             # --- Standard LJ 12-6: 4ε[(σ/r)^12 - (σ/r)^6] ---
-            eps_L = type_probs_L @ self.epsilon[:9].float()
+            eps_L = torch.relu(type_probs_L @ self.epsilon[:9].float())
             # Use geometric mean of epsilon for mixed pairs
-            eps_ij = torch.sqrt(eps_L.unsqueeze(-1) * 0.15 + 1e-8)  # 0.15 = avg protein epsilon
+            # 0.15 is the avg protein epsilon; add 1e-8 for sqrt stability
+            eps_ij = torch.sqrt(eps_L.unsqueeze(-1) * 0.15 + 1e-8)
             
+            # Clamp ratio to prevent Inf^12 - Inf^6 = NaN
+            # A ratio of 5.0 means atoms are 5x closer than equilibrium; force is already massive.
             ratio = sigma_ij / (soft_dist + 1e-8)
+            ratio = torch.clamp(ratio, max=5.0) 
+            
             ratio6 = ratio.pow(6)
             ratio12 = ratio6.pow(2)
             e_vdw_raw = 4.0 * eps_ij * (ratio12 - ratio6)
-            e_vdw = torch.clamp(e_vdw_raw, min=-50.0, max=500.0)
+            e_vdw = torch.clamp(e_vdw_raw, min=-10.0, max=500.0)
             
             # --- Distance cutoff (smooth, no softmax) ---
             CUTOFF = 12.0
