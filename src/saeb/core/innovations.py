@@ -24,7 +24,13 @@ class ShortcutFlowLoss(nn.Module):
         v_target = v_target.view(B, N, 3)
         l_fm = F.huber_loss(v_pred, v_target, delta=1.0)
 
-        x1_target = x1_target.view(1, N, 3).expand(B, -1, -1)
+        # Fix: Ensure x1_target is handled correctly regardless of input shape
+        if x1_target.dim() == 2: # (N, 3)
+            x1_target = x1_target.view(1, N, 3).expand(B, -1, -1)
+        elif x1_target.dim() == 3: # (B or 1, N, 3)
+            if x1_target.size(0) == 1:
+                x1_target = x1_target.expand(B, -1, -1)
+        
         x1_pred = x1_pred.view(B, N, 3)
         conf = confidence.view(B, N, 1)
         # Confidence gates the shortcut loss — high confidence → strong x1 supervision
@@ -67,8 +73,11 @@ def pat_step(pos_L, v_pred, f_phys, alpha_ema, confidence, dt):
     # f_phys can be huge or tiny. We scale it to match v_pred magnitude
     # This prevents physics from drowning out the model gradients or being ignored.
     v_norm = v_pred.norm(dim=-1, keepdim=True).detach()
+    # Bug Fix 18: Add floor to v_norm for f_phys scaling.
+    # Ensures physics guidance continues even if neural model is stagnant.
+    target_norm = torch.clamp(v_norm, min=0.02) 
     f_norm = f_phys.norm(dim=-1, keepdim=True)
-    f_phys_scaled = f_phys / (f_norm + 1e-8) * v_norm
+    f_phys_scaled = f_phys / (f_norm + 1e-8) * target_norm
     
     velocity = (1.0 - alpha_ema) * v_pred + alpha_ema * f_phys_scaled
     
@@ -132,10 +141,12 @@ def run_with_recycling(model, recycling_encoder, pos_L, x_L, x_P, pos_P, h_P, t_
         
         if 'v_pred' in out:
              dt = 1.0 / n_recycle
+             # Ensure t_flow is passed as a float
+             t_val = t_flow[0].item() if torch.is_tensor(t_flow) else t_flow
              pos_L = shortcut_step(pos_L, out['v_pred'].view(B, N, 3), 
                                   out.get('x1_pred', pos_L).view(B, N, 3), 
                                   out.get('confidence', torch.zeros_like(pos_L[..., :1])), 
-                                  t_flow[0].item(), dt)
+                                  t_val, dt)
         
         if i < n_recycle - 1 and 'latent' in out:
              # prev_latent is used to generate the recycling signal

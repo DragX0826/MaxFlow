@@ -173,8 +173,10 @@ def main():
 
     results_summary = []
 
-    if args.kaggle or len(tasks) == 1:
-        # Sequential mode — safe for Kaggle notebooks (no fork/spawn issues)
+    if (not args.num_gpus or args.num_gpus <= 1) or len(tasks) == 1:
+        # Sequential mode — safe for single GPU or single task.
+        # Note: We no longer force sequential just because of --kaggle flag,
+        # allowing multi-GPU to leverage spawn-based multiprocessing.
         for i, (pdb_id, seed) in enumerate(tasks):
             gpu_id = i % max(1, args.num_gpus)
             res = run_single_target(pdb_id, gpu_id, seed, args)

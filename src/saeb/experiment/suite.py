@@ -212,8 +212,14 @@ class SAEBFlowExperiment:
                 raw_energy.sum(), pos_L, retain_graph=False, create_graph=False
             )[0].detach()  # detach so it doesn't interfere with backward
 
-            # ── Backward & Optimizer Step (uses graph before position update) 
-            (loss_fm + loss_phys + loss_pocket).backward()
+            # ── Backward & Optimizer Step
+            # Bug Fix 17: In inference, only optimize pos_L via physical forces & guidance.
+            # DO NOT backward loss_fm as it leads to zero-velocity trivial solutions in self-consistency.
+            if is_train:
+                (loss_fm + loss_phys + loss_pocket).backward()
+            else:
+                (loss_phys + loss_pocket).backward()
+            
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             opt.step()
             scheduler.step()
@@ -261,9 +267,11 @@ class SAEBFlowExperiment:
 
             # ── Log ────────────────────────────────────────────────────────
             if step % log_every == 0 or step == total_steps - 1:
+                # Calculate average force norm for logging
+                f_norm_avg = f_phys.norm(dim=-1).mean().item()
                 logger.info(
                     f"  [{step+1:4d}/{total_steps}] "
-                    f"E={history_E[-1]:8.1f}  FM={history_FM[-1]:.4f}  "
+                    f"E={history_E[-1]:8.1f}  F_phys={f_norm_avg:.4f}  "
                     f"CosSim={history_CosSim[-1]:.3f}  α={alpha:.2f}  "
                     f"T={T_curr:.3f}  "
                     f"RMSD_min={history_RMSD[-1]:.2f}A  "
