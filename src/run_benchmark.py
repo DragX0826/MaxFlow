@@ -94,12 +94,18 @@ def run_single_target(pdb_id, device_id, seed, args):
 
 
 def worker(q_in, q_out, gpu_id, args_copy):
-    """Pickleable worker for torch.multiprocessing spawn."""
+    """Pickleable worker for torch.multiprocessing spawn.
+    Sets CUDA_VISIBLE_DEVICES so this process only sees its own GPU.
+    This avoids cross-device tensor errors.
+    """
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     while True:
         task = q_in.get()
         if task is None: break
         pdb_id, seed = task
-        res = run_single_target(pdb_id, gpu_id, seed, args_copy)
+        # gpu_id within this process is always 0 (we only see one GPU)
+        res = run_single_target(pdb_id, 0, seed, args_copy)
         q_out.put(res)
 
 

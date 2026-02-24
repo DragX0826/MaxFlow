@@ -71,7 +71,11 @@ class SAEBFlowExperiment:
         logger.info(f"SAEB-Flow | {self.config.target_name} ({self.config.pdb_id})")
         if device is None:
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        else:
+            device = torch.device(device)
 
+        # Set device on featurizer immediately so ESM and all tensors are on right GPU
+        self.featurizer.device = device
         self.phys = self.phys.to(device)
 
         # ── Data ────────────────────────────────────────────────────────────
