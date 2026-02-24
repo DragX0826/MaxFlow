@@ -130,6 +130,17 @@ class SAEBFlowExperiment:
         history_FM   = []
         history_CosSim = []        # Flow alignment with Physics force
 
+        # ── Precompute pocket residue mask for guided exploration ────────────
+        # Finds protein atoms within 6Å of the pocket centre — used as magnet
+        with torch.no_grad():
+            dist_to_pocket = torch.cdist(pos_P.unsqueeze(0), p_center.unsqueeze(0).unsqueeze(0))[0, :, 0]
+            pocket_mask = (dist_to_pocket < 6.0)  # (M,) bool
+            # Pocket centroid as weighted mean of nearby protein atoms
+            if pocket_mask.sum() > 0:
+                pocket_anchor = pos_P[pocket_mask].mean(dim=0)  # (3,)
+            else:
+                pocket_anchor = p_center
+
         prev_pos_L = prev_latent = None
 
         for step in range(total_steps):
@@ -175,22 +186,33 @@ class SAEBFlowExperiment:
             # Physics energy + Explicit Force (for alignment check)
             # We use autograd to get -grad(Energy) as the physical force vector
             pos_L.requires_grad_(True)
-            energy, _, alpha, _ = self.phys.compute_energy(
+            energy, e_hard, alpha, _ = self.phys.compute_energy(
                 pos_L, pos_P, q_L_b, q_P, x_L, x_P, t
             )
             loss_phys = energy.mean() * 0.01
-            
+
+            # ── Fix 1: Pocket Residue Guidance (attract toward binding site) ─
+            # Soft L2 loss pulling ligand centroid toward pocket anchor
+            lig_centroid = pos_L.mean(dim=1)             # (B, 3)
+            pocket_dist  = (lig_centroid - pocket_anchor.unsqueeze(0)).pow(2).sum(-1)
+            # Decay guidance over time — less needed as ligand settles
+            guidance_weight = max(0.1 * (1.0 - t * 2.0), 0.0)
+            loss_pocket = guidance_weight * pocket_dist.mean()
+
             # Compute physical force: F = -dE/dpos
             f_phys = -torch.autograd.grad(energy.sum(), pos_L, retain_graph=True)[0]
-            
-            # ── Alignment Metric (no grad) ──────────────────────────────────
+
+            # ── Alignment Metric (no grad) ────────────────────────────────────
             with torch.no_grad():
-                # v_pred: flow direction; f_phys: physics direction
-                # Normalize both to get cosine similarity
                 cos_sim = F.cosine_similarity(v_pred, f_phys, dim=-1).mean()
                 history_CosSim.append(cos_sim.item())
 
-            (loss_fm + loss_phys).backward()
+            # ── Fix 2: Alpha Hardening — call update_alpha based on force mag ─
+            with torch.no_grad():
+                force_mag = f_phys.norm(dim=-1).mean().item()
+                self.phys.update_alpha(force_mag)
+
+            (loss_fm + loss_phys + loss_pocket).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             opt.step()
             scheduler.step()
@@ -213,9 +235,9 @@ class SAEBFlowExperiment:
                 logger.info(
                     f"  [{step+1:4d}/{total_steps}] "
                     f"E={history_E[-1]:8.1f}  FM={history_FM[-1]:.4f}  "
-                    f"CosSim={history_CosSim[-1]:.3f}  "
+                    f"CosSim={history_CosSim[-1]:.3f}  α={alpha:.2f}  "
                     f"RMSD_min={r_min:.2f}A  RMSD_mean={r_mean:.2f}A  "
-                    f"alpha={alpha:.2f}  lr={scheduler.get_last_lr()[0]:.2e}"
+                    f"lr={scheduler.get_last_lr()[0]:.2e}"
                 )
 
         # ── Final evaluation ─────────────────────────────────────────────────

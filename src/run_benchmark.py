@@ -139,12 +139,15 @@ def main():
     args = parser.parse_args()
 
     if args.high_fidelity:
-        args.steps = 1000
-        args.batch_size = 64
+        if args.steps == 300:   args.steps = 1000
+        if args.batch_size == 16: args.batch_size = 128  # wider search
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger("SAEB-Flow.CLI")
     os.makedirs(args.output_dir, exist_ok=True)
+
+    if args.high_fidelity:
+        logger.info(f"High-fidelity mode: steps={args.steps}, B={args.batch_size}")
 
     # Select targets
     if args.pdb_id:
