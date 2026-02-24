@@ -76,6 +76,17 @@ def langevin_noise(pos_shape, temperature, dt, device):
     noise = torch.randn(pos_shape, device=device)
     return torch.sqrt(torch.tensor(2.0 * temperature * dt, device=device)) * noise
 
+def shortcut_step(pos_L, v_pred, x1_pred, confidence, t, dt):
+    """
+    Legacy CBSF shortcut step (compatibility shim for PAT).
+    """
+    # Simply use pat_step but with f_phys = 0 and alpha_ema = 0
+    # Or just re-implement the simple version:
+    conf = confidence
+    euler_step = pos_L + v_pred * dt
+    new_pos = (1.0 - conf) * euler_step + conf * x1_pred
+    return new_pos
+
 
 def run_with_recycling(model, recycling_encoder, pos_L, x_L, x_P, pos_P, h_P, t_flow, n_recycle=3):
     """Iterative recycling wrapper for SAEB-Flow."""

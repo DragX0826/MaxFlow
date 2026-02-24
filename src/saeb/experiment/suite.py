@@ -12,7 +12,7 @@ from ..physics.config import ForceFieldParameters
 from ..reporting.visualizer import PublicationVisualizer
 from ..utils.pdb_io import RealPDBFeaturizer, save_points_as_pdb
 from ..core.model import SAEBFlowBackbone, RectifiedFlow
-from ..core.innovations import ShortcutFlowLoss, shortcut_step
+from ..core.innovations import ShortcutFlowLoss, pat_step, langevin_noise
 from .config import SimulationConfig
 
 logger = logging.getLogger("SAEB-Flow.experiment.suite")
@@ -188,66 +188,31 @@ class SAEBFlowExperiment:
                     confidence.view(B * N, 1), euler_pos, B, N
                 )
 
-            # Physics energy + Explicit Force (for alignment check)
-            # We use autograd to get -grad(Energy) as the physical force vector
-            pos_L.requires_grad_(True)
+            # ── Physics Energy + Force ─────────────────────────────────────
+            # pos_L.requires_grad_(True) is already set (it's an nn.Parameter)
             energy, e_hard, alpha, _ = self.phys.compute_energy(
                 pos_L, pos_P, q_L_b, q_P, x_L, x_P, t
             )
             loss_phys = energy.mean() * 0.01
 
-            # ── Fix 1: Pocket Residue Guidance (attract toward binding site) ─
-            # Soft L2 loss pulling ligand centroid toward pocket anchor
-            lig_centroid = pos_L.mean(dim=1)             # (B, 3)
+            # Pocket Guidance (decays to 0 at t=0.5)
+            lig_centroid = pos_L.mean(dim=1)
             pocket_dist  = (lig_centroid - pocket_anchor.unsqueeze(0)).pow(2).sum(-1)
-            # Decay guidance over time — less needed as ligand settles
             guidance_weight = max(0.1 * (1.0 - t * 2.0), 0.0)
             loss_pocket = guidance_weight * pocket_dist.mean()
 
-            # Compute physical force: F = -dE/dpos
-            f_phys = -torch.autograd.grad(energy.sum(), pos_L, retain_graph=True)[0]
+            # Compute physical force BEFORE backward to reuse graph
+            f_phys = -torch.autograd.grad(
+                energy.sum(), pos_L, retain_graph=True, create_graph=False
+            )[0].detach()  # detach so it doesn't interfere with backward
 
-            # ── Alignment Metric (no grad) ────────────────────────────────────
-            with torch.no_grad():
-                cos_sim = F.cosine_similarity(v_pred, f_phys, dim=-1).mean()
-                history_CosSim.append(cos_sim.item())
-
-            # ── Fix 2: Alpha Hardening — call update_alpha based on force mag ─
-            with torch.no_grad():
-                force_mag = f_phys.norm(dim=-1).mean().item()
-                self.phys.update_alpha(force_mag)
-
-            # ── Langevin Temperature Annealing ──────────────────────────────
-            if step < 0.8 * total_steps:
-                prog_noise = step / (0.8 * total_steps)
-                T_curr = 0.5 * self.config.temp_start * (1 + math.cos(math.pi * prog_noise))
-            else:
-                T_curr = 0.0
-
-            # ── PAT: Physics-Adaptive Trust (Magma Inspired) ────────────────
-            with torch.no_grad():
-                c_i = F.cosine_similarity(v_pred, f_phys, dim=-1).unsqueeze(-1)
-                history_CosSim.append(c_i.mean().item())
-                alpha_tilt = torch.sigmoid(c_i / tau)
-                alpha_ema = beta_ema * alpha_ema + (1.0 - beta_ema) * alpha_tilt
-
-            # ── Combined Update Step ────────────────────────────────────────
-            with torch.no_grad():
-                noise = langevin_noise(pos_L.shape, T_curr, dt, device)
-                pos_new = pat_step(pos_L, v_pred, f_phys, alpha_ema, confidence, dt)
-                pos_L.data.copy_(pos_new + noise)
-
-            # ── Alpha Hardening (Curriculum) ────────────────────────────────
-            with torch.no_grad():
-                force_mag = f_phys.norm(dim=-1).mean().item()
-                self.phys.update_alpha(force_mag)
-
+            # ── Backward & Optimizer Step (uses graph before position update) 
             (loss_fm + loss_phys + loss_pocket).backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             opt.step()
             scheduler.step()
 
-            # ── Metrics ─────────────────────────────────────────────────────
+            # ── Metrics (before position overwrite) ────────────────────────
             history_E.append(energy.mean().item())
             history_FM.append(loss_fm.item())
 
@@ -257,11 +222,40 @@ class SAEBFlowExperiment:
                     rmsd = kabsch_rmsd(pos_L.detach(), pos_native)
                     r_min, r_mean = rmsd.min().item(), rmsd.mean().item()
                 history_RMSD.append(r_min)
+
+            # ── Langevin Temperature Annealing ─────────────────────────────
+            if step < 0.8 * total_steps:
+                prog_noise = step / (0.8 * total_steps)
+                T_curr = 0.5 * self.config.temp_start * (1 + math.cos(math.pi * prog_noise))
+            else:
+                T_curr = 0.0
+
+            # ── PAT: Physics-Adaptive Trust (Magma Inspired) ───────────────
+            # Atom-wise CosSim → Tempered Sigmoid → EMA smoothing
+            with torch.no_grad():
+                c_i = F.cosine_similarity(v_pred.detach(), f_phys, dim=-1).unsqueeze(-1)
+                history_CosSim.append(c_i.mean().item())
+                alpha_tilt = torch.sigmoid(c_i / tau)
+                alpha_ema = beta_ema * alpha_ema + (1.0 - beta_ema) * alpha_tilt
+
+            # ── PAT + Langevin Combined Position Update ────────────────────
+            with torch.no_grad():
+                noise   = langevin_noise(pos_L.shape, T_curr, dt, device)
+                pos_new = pat_step(pos_L, v_pred.detach(), f_phys, alpha_ema, confidence, dt)
+                pos_L.data.copy_(pos_new + noise)
+
+            # ── Alpha Hardening (called once per step) ─────────────────────
+            with torch.no_grad():
+                self.phys.update_alpha(f_phys.norm(dim=-1).mean().item())
+
+            # ── Log ────────────────────────────────────────────────────────
+            if step % log_every == 0 or step == total_steps - 1:
                 logger.info(
                     f"  [{step+1:4d}/{total_steps}] "
                     f"E={history_E[-1]:8.1f}  FM={history_FM[-1]:.4f}  "
                     f"CosSim={history_CosSim[-1]:.3f}  α={alpha:.2f}  "
-                    f"RMSD_min={r_min:.2f}A  RMSD_mean={r_mean:.2f}A  "
+                    f"T={T_curr:.3f}  "
+                    f"RMSD_min={history_RMSD[-1]:.2f}A  "
                     f"lr={scheduler.get_last_lr()[0]:.2e}"
                 )
 
