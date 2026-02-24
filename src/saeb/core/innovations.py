@@ -210,7 +210,10 @@ class Muon(torch.optim.Optimizer):
                     
                     # Newton-Schulz iterations
                     for _ in range(ns_steps):
-                        X = 1.5 * X - 0.5 * X @ (X.T @ X)
+                        X_new = 1.5 * X - 0.5 * X @ (X.T @ X)
+                        if torch.isnan(X_new).any() or torch.isinf(X_new).any():
+                            break # Stability break
+                        X = X_new
                     
                     # Apply update
                     if p.data.size(0) <= p.data.size(1):

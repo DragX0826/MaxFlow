@@ -232,9 +232,7 @@ class SAEBFlowExperiment:
             x1_pred    = out['x1_pred']     # (B, N, 3)
             confidence = out['confidence']  # (B, N, 1)
 
-            # Store latent for recycling
-            prev_pos_L  = pos_L.detach().clone()
-            prev_latent = out['latent'].detach().clone()
+            # (Recycling storage moved to end of loop to fix Bug 21 consistency)
 
             # ── Loss ────────────────────────────────────────────────────────
             dt = 1.0 / total_steps
@@ -262,6 +260,11 @@ class SAEBFlowExperiment:
             # We want f_phys to be the EXPLICIT and ONLY physical guide in the PAT step.
             loss_phys = raw_energy.mean().detach() * 0.01
 
+            # Compute physical force
+            f_phys = -torch.autograd.grad(
+                raw_energy.sum(), pos_L, retain_graph=False, create_graph=False
+            )[0].detach()
+
             # Pocket Guidance (Imp 3: Dynamic two-stage guidance)
             lig_centroid = pos_L.mean(dim=1, keepdim=True) # (B, 1, 3)
             # Balanced pull weight: enough to pull in, not enough to crush
@@ -270,22 +273,16 @@ class SAEBFlowExperiment:
             else:
                 guidance_weight = 0.1 * math.exp(-3.0 * t) 
                 
-            # Bug Fix 1.8: Apply guidance as a direct force in inference mode (Imp 1)
-            # Use a more conservative multiplier (20.0 instead of 50.0)
-            f_pocket = (pocket_anchor.unsqueeze(0) - lig_centroid) * (guidance_weight * 20.0)
+            # Bug Fix 1.8: Apply guidance as a direct force (Imp 1 & 3)
+            # Recalibrated to 2.0x (lower) to prevent crushing binding modes early on
+            com_offset = (pocket_anchor.unsqueeze(0) - lig_centroid) * (guidance_weight * 2.0)
+            f_phys = f_phys + com_offset # Broadcast factor
             
             # Loss for training/logging
             pocket_dist = (lig_centroid.squeeze(1) - pocket_anchor.unsqueeze(0)).pow(2).sum(-1)
             loss_pocket = guidance_weight * pocket_dist.mean()
-
-            # Compute physical force
-            f_phys = -torch.autograd.grad(
-                raw_energy.sum(), pos_L, retain_graph=False, create_graph=False
-            )[0].detach()
             
-            # Add pocket guidance force in inference mode
-            if not is_train:
-                f_phys = f_phys + f_pocket.expand_as(f_phys)
+            # (Note: com_offset already added above via Imp 3 logic)
 
             # ── Backward & Optimizer Step
             # Bug Fix 1.8: Always backward loss_fm. 
@@ -350,9 +347,18 @@ class SAEBFlowExperiment:
             with torch.no_grad():
                 # Improvement 4: Langevin Gating (Late-stage shutdown)
                 noise_gate = 1.0 if step < int(0.9 * total_steps) else 0.0
-                noise   = langevin_noise(pos_L.shape, T_curr, dt, device, mass_precomputed=mass_precomputed) * noise_gate
+                noise = langevin_noise(pos_L.shape, T_curr, dt, device, mass_precomputed=mass_precomputed) * noise_gate
+                
+                # Imp 2: Shortcut Pull (Accelerate convergence using x1_pred)
+                # Use model guess weighted by confidence
+                shortcut_pull = (x1_pred.detach() - pos_L) * confidence.detach() * 0.05
+                
                 pos_new = pat_step(pos_L, v_pred.detach(), f_phys, alpha_ema_corr, confidence.detach(), dt)
-                pos_L.data.copy_(pos_new + noise)
+                pos_L.data.copy_(pos_new + noise + shortcut_pull)
+                
+                # Bug 20: Zero-leakage Management
+                if not is_train:
+                    pos_L.grad = None
 
             # ── Alpha Hardening (called once per step) ─────────────────────
             with torch.no_grad():
@@ -373,6 +379,44 @@ class SAEBFlowExperiment:
                         s_idx = good_idx[i % top_k]
                         # Transfer position with perturbation
                         pos_L.data[b_idx] = pos_L.data[s_idx] + torch.randn_like(pos_L.data[s_idx]) * 0.5
+
+            # ── Rigid-Body Rotational Sampler (Imp 1: v1.9 Breakout) ────────
+            # To break the 3.5A ceiling: random rigid rotation for high-E clones
+            # Increased frequency (every 20 steps) for aggressive breakout
+            if step > warmup_steps and step % 20 == 0:
+                with torch.no_grad():
+                    # Rotate the bottom 50% energy clones
+                    rotate_idx = energy_clamped.argsort()[B // 2:]
+                    
+                    e_before = energy_clamped[rotate_idx].mean().item()
+                    for idx in rotate_idx:
+                        com = pos_L.data[idx].mean(dim=0, keepdim=True) # (1, 3)
+                        centered = pos_L.data[idx] - com # (N, 3)
+                        
+                        # Random rotation axis and angle (0-180deg)
+                        axis = F.normalize(torch.randn(3, device=device), dim=0)
+                        angle = torch.rand(1, device=device) * math.pi
+                        
+                        # Rodrigues rotation formula
+                        K = torch.tensor([
+                            [0, -axis[2], axis[1]],
+                            [axis[2], 0, -axis[0]],
+                            [-axis[1], axis[0], 0]
+                        ], device=device)
+                        R = (torch.eye(3, device=device) + 
+                             math.sin(angle.item()) * K + 
+                             (1 - math.cos(angle.item())) * (K @ K))
+                        
+                        # Apply rotation + small translation jitter (0.5A)
+                        jitter = torch.randn(1, 3, device=device) * 0.5
+                        pos_L.data[idx] = (centered @ R.T) + com + jitter
+                    
+                    logger.info(f"  [RotSampler] Re-sampled {len(rotate_idx)} clones (Mean E_prev={e_before:.1f})")
+
+            # ── Bug 21: Finalize Recycling State ───────────────────────────
+            # Ensure recycling sees the results of all samplers (Replica/Rotation)
+            prev_pos_L  = pos_L.detach().clone()
+            prev_latent = out['latent'].detach().clone()
 
             # ── Log ────────────────────────────────────────────────────────
             if step % log_every == 0 or step == total_steps - 1:
