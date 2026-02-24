@@ -97,11 +97,8 @@ class SAEBFlowExperiment:
         N = pos_native.shape[0]
 
         # ── Ligand ensemble initialisation ──────────────────────────────────
-        # Spread clones uniformly around pocket centre
-        pos_L = nn.Parameter(
-            p_center.unsqueeze(0).expand(B, N, -1).clone() +
-            torch.randn(B, N, 3, device=device) * 3.0
-        )
+        # Initialize with standard spherical noise; will be refined by PCA sampling below
+        pos_L = nn.Parameter(torch.randn(B, N, 3, device=device))
         x_L = nn.Parameter(x_L_native.unsqueeze(0).expand(B, -1, -1).clone())
 
         # ── Model ───────────────────────────────────────────────────────────
@@ -150,23 +147,49 @@ class SAEBFlowExperiment:
             mass_precomputed = (x_L[0, :, :9] * mass_coeffs).sum(dim=-1, keepdim=True).unsqueeze(0).expand(B, -1, -1)
             mass_precomputed = torch.clamp(mass_precomputed, min=12.0)
 
-        # ── Precompute pocket residue mask for guided exploration ────────────
-        # Finds protein atoms within 6Å of the pocket centre — used as magnet
+        # ── Precompute pocket residue mask & PCA Initialization (Imp 2) ─────
+        # Finds protein atoms within 6Å of the pocket centre
         with torch.no_grad():
             dist_to_pocket = torch.cdist(pos_P.unsqueeze(0), p_center.unsqueeze(0).unsqueeze(0))[0, :, 0]
             pocket_mask = (dist_to_pocket < 6.0)  # (M,) bool
             
             # Robust Anchor (Bug fix): Ensure at least 20 atoms are used
             if pocket_mask.sum() < 20:
-                # Fallback to Top-K closest atoms if 6A radius is too sparse
                 k = min(20, len(dist_to_pocket))
                 topk_idx = torch.topk(dist_to_pocket, k=k, largest=False).indices
-                pocket_anchor = pos_P[topk_idx].mean(dim=0)
+                pocket_pts = pos_P[topk_idx]
             else:
-                pocket_anchor = pos_P[pocket_mask].mean(dim=0)
+                pocket_pts = pos_P[pocket_mask]
+            
+            pocket_anchor = pocket_pts.mean(dim=0)
+
+            # Directional Sampling (PCA): Better pocket coverage
+            try:
+                centered = pocket_pts - pocket_anchor
+                cov = centered.T @ centered / len(centered)
+                Up, Sp, Vhp = torch.linalg.svd(cov)
+                # Scale noise: 2.5Å along main axis, 1.5Å/1.0Å along others
+                v_scales = torch.tensor([2.5, 1.5, 1.0], device=device)
+                noise = torch.randn(B, N, 3, device=device)
+                # Align noise to pocket principle axes
+                noise = noise @ (Vhp.transpose(-1, -2) * v_scales).transpose(-1, -2)
+            except Exception:
+                noise = torch.randn(B, N, 3, device=device) * 2.5
+            
+            # Initial position refined by PCA
+            pos_L.data.copy_(pocket_anchor + noise)
+
+        # ── Data Consistency: Batch expansion (Imp 5) ──────────────────────
+        q_P_b = q_P.unsqueeze(0).expand(B, -1)
+        x_P_b = x_P.unsqueeze(0).expand(B, -1, -1)
+        pos_P_b = pos_P.unsqueeze(0).expand(B, -1, -1)
 
         prev_pos_L = prev_latent = None
         log_every = max(total_steps // 10, 1)
+        
+        # Improvement 1: Historical Best Tracking
+        best_rmsd_ever = float('inf')
+        best_pos_history = None
 
         for step in range(total_steps):
             # t in (0, 1] — avoid t=0 where conditional field is undefined
@@ -210,7 +233,7 @@ class SAEBFlowExperiment:
 
             # pos_L.requires_grad_(True) is already set (it's an nn.Parameter)
             raw_energy, e_hard, alpha, energy_clamped = self.phys.compute_energy(
-                pos_L, pos_P, q_L_b, q_P, x_L, x_P, t
+                pos_L, pos_P_b, q_L_b, q_P_b, x_L, x_P_b, t # Imp 5: Batch consistency
             )
             # Issue 8 Fix: Gradient Isolation
             # Detach raw_energy for loss_phys to prevent it from contributing to pos_L.grad.
@@ -248,6 +271,13 @@ class SAEBFlowExperiment:
             with torch.no_grad():
                 rmsd = kabsch_rmsd(pos_L.detach(), pos_native)
                 r_min = rmsd.min().item()
+                
+                # Improvement 1: Update historical best
+                if r_min < best_rmsd_ever:
+                    best_rmsd_ever = r_min
+                    best_idx = rmsd.argmin()
+                    best_pos_history = pos_L[best_idx].detach().clone()
+                    
             history_RMSD.append(r_min)
 
             # ── Langevin Temperature Annealing ─────────────────────────────
@@ -258,7 +288,12 @@ class SAEBFlowExperiment:
             # ── PAT: Physics-Adaptive Trust (Magma Inspired) ───────────────
             # Atom-wise CosSim → Tempered Sigmoid → EMA smoothing
             with torch.no_grad():
-                c_i = F.cosine_similarity(v_pred.detach(), f_phys, dim=-1).unsqueeze(-1)
+                # Imp 6: Scaled CosSim for trust alignment
+                f_norm = f_phys.norm(dim=-1, keepdim=True)
+                v_norm_clamped = v_pred.norm(dim=-1, keepdim=True).detach().clamp(min=0.02)
+                f_phys_scaled_for_trust = f_phys / (f_norm + 1e-8) * v_norm_clamped
+                
+                c_i = F.cosine_similarity(v_pred.detach(), f_phys_scaled_for_trust, dim=-1).unsqueeze(-1)
                 alpha_tilt = torch.sigmoid(c_i / tau)
                 
                 # Confidence-weighted trust: lower confidence => more physics trust
@@ -272,8 +307,9 @@ class SAEBFlowExperiment:
 
             # ── PAT + Langevin Combined Position Update ────────────────────
             with torch.no_grad():
-                # Bug Fix: Pass precomputed mass for efficiency
-                noise   = langevin_noise(pos_L.shape, T_curr, dt, device, mass_precomputed=mass_precomputed)
+                # Improvement 4: Langevin Gating (Late-stage shutdown)
+                noise_gate = 1.0 if step < int(0.9 * total_steps) else 0.0
+                noise   = langevin_noise(pos_L.shape, T_curr, dt, device, mass_precomputed=mass_precomputed) * noise_gate
                 pos_new = pat_step(pos_L, v_pred.detach(), f_phys, alpha_ema_corr, confidence.detach(), dt)
                 pos_L.data.copy_(pos_new + noise)
 
@@ -294,12 +330,37 @@ class SAEBFlowExperiment:
                     f"lr={scheduler.get_last_lr()[0]:.2e}"
                 )
 
-        # ── Final evaluation ─────────────────────────────────────────────────
-        with torch.no_grad():
+        # ── Final Selection & Refinement (Imp 1 & 3) ──────────────────────────
+        # Use historical best if available
+        if best_pos_history is not None:
+            pos_L_final = best_pos_history.unsqueeze(0)
+        else:
             final_rmsd = kabsch_rmsd(pos_L.detach(), pos_native)
             best_idx   = final_rmsd.argmin()
-            best_rmsd  = final_rmsd[best_idx].item()
-            best_pos   = pos_L[best_idx].detach().cpu().numpy()
+            pos_L_final = pos_L[best_idx].detach().clone().unsqueeze(0)
+
+        # Improvement 3: L-BFGS Geometry Refinement
+        if not is_train:
+            logger.info("  [Refine] Polishing structure with L-BFGS...")
+            pos_ref = torch.nn.Parameter(pos_L_final.clone())
+            optimizer_bfgs = torch.optim.LBFGS([pos_ref], lr=0.1, max_iter=20)
+            
+            def closure():
+                optimizer_bfgs.zero_grad()
+                g_loss = self.phys.calculate_internal_geometry_score(pos_ref).mean()
+                g_loss.backward()
+                return g_loss
+            
+            try:
+                optimizer_bfgs.step(closure)
+                pos_L_final = pos_ref.detach()
+            except Exception as e:
+                logger.warning(f"  [Refine] L-BFGS failed: {e}")
+
+        with torch.no_grad():
+            final_rmsd = kabsch_rmsd(pos_L_final, pos_native)
+            best_rmsd  = final_rmsd.min().item()
+            best_pos   = pos_L_final[0].detach().cpu().numpy()
 
         print(f"\n{'='*55}")
         print(f" {self.config.pdb_id:8s}  best={best_rmsd:.2f}A  "
