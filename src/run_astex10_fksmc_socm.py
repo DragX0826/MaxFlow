@@ -46,6 +46,8 @@ def main():
                         help="Fraction of worst clones to MMFF-snap in mid-run")
     parser.add_argument("--no_target_plots", action="store_true",
                         help="Skip per-target plots for faster benchmark runs")
+    parser.add_argument("--no_aggregate_figures", action="store_true",
+                        help="Skip aggregate figure generation")
     parser.add_argument("--output_dir", type=str, default="results/astex10_fksmc_socm")
     args = parser.parse_args()
 
@@ -93,6 +95,8 @@ def main():
         cmd.append("--compile_backbone")
     if args.no_target_plots:
         cmd.append("--no_target_plots")
+    if args.no_aggregate_figures:
+        cmd.append("--no_aggregate_figures")
 
     print("Launching:", " ".join(cmd))
     result = subprocess.run(cmd)

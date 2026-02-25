@@ -253,14 +253,14 @@ class FeynmanKacSMC:
         phys,
         beta: float = 1.0,  # kept for API compatibility; annealing is used for weighting
         resample_threshold: float = 0.5,
-        beta_start: float = 0.005,
-        beta_end: float = 0.5,
+        beta_start: float = 0.02,
+        beta_end: float = 1.0,
         rejuv_factor: float = 3.0,
     ):
         self.phys = phys
         self.resample_threshold = resample_threshold
-        self.beta_start = beta_start  # B2: default raised to 0.02
-        self.beta_end = beta_end       # B2: default raised to 1.0
+        self.beta_start = beta_start
+        self.beta_end = beta_end
         self.rejuv_factor = rejuv_factor
         self._beta_legacy = beta
 
@@ -1138,8 +1138,11 @@ class SAEBFlowRefinement:
         if use_socm_twist is None: use_socm_twist = getattr(self.config, "socm", False)
         if use_srpg is None:       use_srpg = getattr(self.config, "srpg", False)
         if no_backbone is None:    no_backbone = getattr(self.config, "no_backbone", False)
+        use_neural_backbone = not no_backbone
 
         logger.info(f"SAEB-Flow | {self.config.target_name} ({self.config.pdb_id})")
+        if no_backbone:
+            logger.info("  [Ablation] no_backbone=True (physics-only updates)")
         if device is None:
             device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         else:
@@ -1166,43 +1169,50 @@ class SAEBFlowRefinement:
         x_L = nn.Parameter(x_L_native.unsqueeze(0).expand(B, -1, -1).clone())
 
         # ── Model ───────────────────────────────────────────────────────────
-        backbone = SAEBFlowBackbone(167, 64, num_layers=2).to(device)
-        model    = RectifiedFlow(backbone).to(device)
-        use_amp = bool(getattr(self.config, "amp", False) and device.type == "cuda")
-        use_compile_backbone = bool(getattr(self.config, "compile_backbone", False) and device.type == "cuda")
-        if use_compile_backbone and hasattr(torch, "compile"):
-            try:
-                model.backbone = torch.compile(model.backbone, mode="reduce-overhead")
-                logger.info("  [Speed] torch.compile enabled for backbone")
-            except Exception as e:
-                logger.warning(f"  [Speed] torch.compile skipped: {e}")
-                use_compile_backbone = False
-
-        cbsf_loss_fn = ShortcutFlowLoss(lambda_x1=1.0, lambda_conf=0.01).to(device)
+        model = None
+        cbsf_loss_fn = None
+        use_amp = bool(use_neural_backbone and getattr(self.config, "amp", False) and device.type == "cuda")
+        use_compile_backbone = bool(use_neural_backbone and getattr(self.config, "compile_backbone", False) and device.type == "cuda")
+        if use_neural_backbone:
+            backbone = SAEBFlowBackbone(167, 64, num_layers=2).to(device)
+            model = RectifiedFlow(backbone).to(device)
+            if use_compile_backbone and hasattr(torch, "compile"):
+                try:
+                    model.backbone = torch.compile(model.backbone, mode="reduce-overhead")
+                    logger.info("  [Speed] torch.compile enabled for backbone")
+                except Exception as e:
+                    logger.warning(f"  [Speed] torch.compile skipped: {e}")
+                    use_compile_backbone = False
+            cbsf_loss_fn = ShortcutFlowLoss(lambda_x1=1.0, lambda_conf=0.01).to(device)
 
         is_train = (self.config.mode == "train")
 
         # ── Optimiser Setup (Imp 1 & 6) ──────────────────────────────────────
         # Separation of parameters for Muon (linear weights) and AdamW (others)
-        muon_params = []
-        adamw_params = []
-        
-        # Backbone params
-        for name, p in model.named_parameters():
-            if p.ndim == 2 and "weight" in name:
-                muon_params.append(p)
-            else:
-                adamw_params.append(p)
-        
-        # Position & Feature params
-        adamw_params.append(x_L)
-        if is_train:
-            # Bug Fix 1.8: Only optimize pos_L via AdamW in training mode.
-            # In inference, pos_L is driven exclusively by PAT/Physics (Imp 1).
-            adamw_params.append(pos_L)
+        opt_adamw = None
+        opt_muon = None
+        sched_adamw = None
+        sched_muon = None
+        if use_neural_backbone:
+            muon_params = []
+            adamw_params = []
             
-        opt_adamw = torch.optim.AdamW(adamw_params, lr=self.config.lr, weight_decay=1e-4)
-        opt_muon  = Muon(muon_params, lr=self.config.lr * 0.02) # Adjusted for stability
+            # Backbone params
+            for name, p in model.named_parameters():
+                if p.ndim == 2 and "weight" in name:
+                    muon_params.append(p)
+                else:
+                    adamw_params.append(p)
+            
+            # Position & Feature params
+            adamw_params.append(x_L)
+            if is_train:
+                # Bug Fix 1.8: Only optimize pos_L via AdamW in training mode.
+                # In inference, pos_L is driven exclusively by PAT/Physics (Imp 1).
+                adamw_params.append(pos_L)
+                
+            opt_adamw = torch.optim.AdamW(adamw_params, lr=self.config.lr, weight_decay=1e-4)
+            opt_muon  = Muon(muon_params, lr=self.config.lr * 0.02) # Adjusted for stability
         
         # Warm-up (fixed 5% of total steps) then cosine decay
         total_steps = self.config.steps
@@ -1214,8 +1224,9 @@ class SAEBFlowRefinement:
             prog = (step - warmup_steps) / max(total_steps - warmup_steps, 1)
             return 0.5 * (1 + math.cos(math.pi * prog))
             
-        sched_adamw = torch.optim.lr_scheduler.LambdaLR(opt_adamw, lr_lambda)
-        sched_muon  = torch.optim.lr_scheduler.LambdaLR(opt_muon, lr_lambda)
+        if use_neural_backbone:
+            sched_adamw = torch.optim.lr_scheduler.LambdaLR(opt_adamw, lr_lambda)
+            sched_muon  = torch.optim.lr_scheduler.LambdaLR(opt_muon, lr_lambda)
 
         # Pre-expand protein tensors (shared across batch)
         pos_P_b = pos_P.unsqueeze(0).expand(B, -1, -1)
@@ -1263,6 +1274,7 @@ class SAEBFlowRefinement:
             pocket_anchor = pocket_anchor_cavity # Initial baseline
 
             # Directional Sampling (PCA): Better pocket coverage
+            principal_axis = torch.tensor([1.0, 0.0, 0.0], device=device)
             try:
                 centered = pocket_pts - pocket_anchor
                 cov = centered.T @ centered / len(centered)
@@ -1272,16 +1284,19 @@ class SAEBFlowRefinement:
                 noise = torch.randn(B, N, 3, device=device)
                 # Align noise to pocket principle axes
                 noise = noise @ (Vhp.transpose(-1, -2) * v_scales).transpose(-1, -2)
+                principal_axis = Vhp[0]
             except Exception:
                 noise = torch.randn(B, N, 3, device=device) * 2.5
+                principal_axis = F.normalize(torch.randn(3, device=device), dim=0)
+            if torch.isnan(principal_axis).any() or principal_axis.norm() < 1e-6:
+                principal_axis = torch.tensor([1.0, 0.0, 0.0], device=device)
             
             # Initial position refined by PCA + 4 Clusters (Imp 5 v3.3)
             # Distribute clones into 4 clusters along the PCA main axis for broader coverage
-            for c in range(4):
-                c_idx = slice(c * (B // 4), (c + 1) * (B // 4))
-                # Spread clusters along primary principle axis (Vhp[0])
-                c_offset = Vhp[0] * (c - 1.5) * 2.5 # ±3.75A spread
-                pos_L.data[c_idx].copy_(pocket_anchor + c_offset + noise[c_idx])
+            for b in range(B):
+                c = b % 4
+                c_offset = principal_axis * (c - 1.5) * 2.5  # ±3.75A spread
+                pos_L.data[b].copy_(pocket_anchor + c_offset + noise[b])
             
             # Imp 3 v3.4: Adaptive Energy Kick Trackers
             energy_stagnation_count = torch.zeros(B, device=device)
@@ -1305,11 +1320,12 @@ class SAEBFlowRefinement:
             t   = (step + 1) / max(total_steps, 1)
             t_t = torch.full((B,), t, device=device)
 
-            opt_adamw.zero_grad()
-            opt_muon.zero_grad()
+            if use_neural_backbone:
+                opt_adamw.zero_grad()
+                opt_muon.zero_grad()
 
             # ── Forward ─────────────────────────────────────────────────────
-            if use_amp:
+            if use_neural_backbone and use_amp:
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
                     out = model(
                         x_L=x_L, x_P=x_P_b,
@@ -1318,7 +1334,7 @@ class SAEBFlowRefinement:
                         prev_pos_L=prev_pos_L,
                         prev_latent=prev_latent,
                     )
-            else:
+            elif use_neural_backbone:
                 out = model(
                     x_L=x_L, x_P=x_P_b,
                     pos_L=pos_L, pos_P=pos_P_b,
@@ -1326,61 +1342,70 @@ class SAEBFlowRefinement:
                     prev_pos_L=prev_pos_L,
                     prev_latent=prev_latent,
                 )
-            # Keep physics path in fp32 for stability.
-            v_pred     = out['v_pred'].to(dtype=pos_L.dtype)      # (B, N, 3)
-            x1_pred    = out['x1_pred'].to(dtype=pos_L.dtype)     # (B, N, 3)
-            confidence = out['confidence'].to(dtype=pos_L.dtype)  # (B, N, 1)
+            else:
+                out = None
+            if use_neural_backbone:
+                # Keep physics path in fp32 for stability.
+                v_pred     = out['v_pred'].to(dtype=pos_L.dtype)      # (B, N, 3)
+                x1_pred    = out['x1_pred'].to(dtype=pos_L.dtype)     # (B, N, 3)
+                confidence = out['confidence'].to(dtype=pos_L.dtype)  # (B, N, 1)
+            else:
+                v_pred = torch.zeros_like(pos_L)
+                x1_pred = pos_L.detach().clone()
+                confidence = torch.zeros(B, N, 1, device=device, dtype=pos_L.dtype)
 
             # (Recycling storage moved to end of loop to fix Bug 21 consistency)
 
             # ── Loss ────────────────────────────────────────────────────────
             dt = 1.0 / total_steps
-            if is_train:
-                # Conditional vector field: v*(xt|x1) = (x1 - xt)/(1 - t)
-                v_target = (pos_native.unsqueeze(0) - pos_L.detach()) / (1.0 - t + 1e-6)
-                loss_fm = cbsf_loss_fn(
-                    v_pred.view(B * N, 3), x1_pred.view(B * N, 3), confidence.view(B * N, 1),
-                    v_target.view(B * N, 3), pos_native, B, N
-                )
-            else:
-                # Inference: self-consistency (no pos_native used)
-                euler_pos = (pos_L.detach() + v_pred * dt)
-                loss_fm = cbsf_loss_fn.inference_loss(
-                    v_pred.view(B * N, 3), x1_pred.view(B * N, 3),
-                    confidence.view(B * N, 1), euler_pos, B, N
-                )
-                
-                # Imp 1 v3.5: Consensus Pocket-Aware Loss
-                # If a historical best exists, pull prediction towards it; otherwise pull to cavity
-                if best_pos_history is not None:
-                    consensus_target = 0.5 * pocket_anchor_cavity + 0.5 * best_pos_history.mean(dim=0)
+            loss_fm = torch.zeros((), device=device)
+            if use_neural_backbone:
+                if is_train:
+                    # Conditional vector field: v*(xt|x1) = (x1 - xt)/(1 - t)
+                    v_target = (pos_native.unsqueeze(0) - pos_L.detach()) / (1.0 - t + 1e-6)
+                    loss_fm = cbsf_loss_fn(
+                        v_pred.view(B * N, 3), x1_pred.view(B * N, 3), confidence.view(B * N, 1),
+                        v_target.view(B * N, 3), pos_native, B, N
+                    )
                 else:
-                    consensus_target = pocket_anchor_cavity
-                
-                x1_centroids = x1_pred.mean(dim=1) # (B, 3)
-                loss_pocket_aware = F.huber_loss(x1_centroids, consensus_target.expand_as(x1_centroids), delta=3.0)
-                
-                # Imp 2.1: Dream-Energy Loss (The "Backbone Energy" Feedback Loop)
-                # Bug Fix 26: Detach x_L to protect ligand chemical identity from corruption
-                e_dream, _, _, _ = self.phys.compute_energy(
-                    x1_pred, pos_P_b, q_L_b, q_P_b, x_L.detach(), x_P_b, t
-                )
-                
-                # Imp 4 v3.3: Asymmetric Dream Gradient
-                # 2x penalty on collisions (e > 500) to prioritize "legal" poses
-                e_weight = torch.where(e_dream > 500.0, 0.010, 0.005)
-                loss_dream = (e_dream.clamp(min=-500, max=2000) * e_weight).mean()
+                    # Inference: self-consistency (no pos_native used)
+                    euler_pos = (pos_L.detach() + v_pred * dt)
+                    loss_fm = cbsf_loss_fn.inference_loss(
+                        v_pred.view(B * N, 3), x1_pred.view(B * N, 3),
+                        confidence.view(B * N, 1), euler_pos, B, N
+                    )
+                    
+                    # Imp 1 v3.5: Consensus Pocket-Aware Loss
+                    # If a historical best exists, pull prediction towards it; otherwise pull to cavity
+                    if best_pos_history is not None:
+                        consensus_target = 0.5 * pocket_anchor_cavity + 0.5 * best_pos_history.mean(dim=0)
+                    else:
+                        consensus_target = pocket_anchor_cavity
+                    
+                    x1_centroids = x1_pred.mean(dim=1) # (B, 3)
+                    loss_pocket_aware = F.huber_loss(x1_centroids, consensus_target.expand_as(x1_centroids), delta=3.0)
+                    
+                    # Imp 2.1: Dream-Energy Loss (The "Backbone Energy" Feedback Loop)
+                    # Bug Fix 26: Detach x_L to protect ligand chemical identity from corruption
+                    e_dream, _, _, _ = self.phys.compute_energy(
+                        x1_pred, pos_P_b, q_L_b, q_P_b, x_L.detach(), x_P_b, t
+                    )
+                    
+                    # Imp 4 v3.3: Asymmetric Dream Gradient
+                    # 2x penalty on collisions (e > 500) to prioritize "legal" poses
+                    e_weight = torch.where(e_dream > 500.0, 0.010, 0.005)
+                    loss_dream = (e_dream.clamp(min=-500, max=2000) * e_weight).mean()
 
-                # Imp 4 v4.0: Manifold Velocity Regularization
-                # Penalize non-rigid displacements in early stages
-                v_mean = v_pred.mean(dim=1, keepdim=True)
-                v_centered = v_pred - v_mean
-                # Approximate rigid rotation consistency (v ~ omega x r)
-                # We simply regularize the variance of velocity norms per batch
-                v_norm_var = v_pred.norm(dim=-1).var(dim=1).mean()
-                loss_manifold = 0.01 * v_norm_var * (1.0 - t)
-                
-                loss_fm = loss_fm + 0.1 * loss_pocket_aware + loss_dream + loss_manifold
+                    # Imp 4 v4.0: Manifold Velocity Regularization
+                    # Penalize non-rigid displacements in early stages
+                    v_mean = v_pred.mean(dim=1, keepdim=True)
+                    v_centered = v_pred - v_mean
+                    # Approximate rigid rotation consistency (v ~ omega x r)
+                    # We simply regularize the variance of velocity norms per batch
+                    v_norm_var = v_pred.norm(dim=-1).var(dim=1).mean()
+                    loss_manifold = 0.01 * v_norm_var * (1.0 - t)
+                    
+                    loss_fm = loss_fm + 0.1 * loss_pocket_aware + loss_dream + loss_manifold
 
             # pos_L.requires_grad_(True) is already set (it's an nn.Parameter)
             raw_energy, e_hard, alpha, energy_clamped = self.phys.compute_energy(
@@ -1439,13 +1464,14 @@ class SAEBFlowRefinement:
             # Bug Fix 1.8: Always backward loss_fm. 
             # In inference, it's the "self-consistency" term that warms up the backbone.
             # loss_phys and loss_pocket are also included for multi-objective alignment.
-            (loss_fm + loss_phys + loss_pocket).backward()
-            
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-            opt_adamw.step()
-            opt_muon.step()
-            sched_adamw.step()
-            sched_muon.step()
+            if use_neural_backbone:
+                (loss_fm + loss_phys + loss_pocket).backward()
+                
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                opt_adamw.step()
+                opt_muon.step()
+                sched_adamw.step()
+                sched_muon.step()
 
             # ── Metrics ───────────────────────────────────────────────────
             history_E.append(energy_clamped.mean().item())
@@ -1653,36 +1679,56 @@ class SAEBFlowRefinement:
             # ── Bug 21/25 Fix: Finalize Recycling State ───────────────────
             # Ensure recycling sees the results of ALL samplers at the absolute end
             prev_pos_L  = pos_L.detach().clone()
-            prev_latent = out['latent'].detach().to(dtype=pos_L.dtype).clone()
+            if use_neural_backbone:
+                prev_latent = out['latent'].detach().to(dtype=pos_L.dtype).clone()
+            else:
+                prev_latent = None
 
             # ── Log ────────────────────────────────────────────────────────
             if step % log_every == 0 or step == total_steps - 1:
                 # Calculate average force norm for logging
                 f_norm_avg = f_phys.norm(dim=-1).mean().item()
+                lr_now = sched_adamw.get_last_lr()[0] if sched_adamw is not None else 0.0
                 logger.info(
                     f"  [{step+1:4d}/{total_steps}] "
                     f"E={history_E[-1]:8.1f}  F_phys={f_norm_avg:.4f}  "
                     f"CosSim={history_CosSim[-1]:.3f}  α_trust={alpha_ema_corr.mean():.2f}  "
                     f"T={T_curr:.3f}  "
                     f"RMSD={history_RMSD[-1]:.2f}A  "
-                    f"lr={sched_adamw.get_last_lr()[0]:.2e}"
+                    f"lr={lr_now:.2e}"
                 )
-
-        # ── Final Selection & Refinement (Imp 1 & 3) ──────────────────────────
-        # Use historical best if available
-        if best_pos_history is not None:
-            pos_L_final = best_pos_history.unsqueeze(0)
-        else:
-            final_rmsd = kabsch_rmsd(pos_L.detach(), pos_native)
-            best_idx   = final_rmsd.argmin()
-            pos_L_final = pos_L[best_idx].detach().clone().unsqueeze(0)
-
-        # Improvement 3 & 5: SOTA MMFF Refinement
-        if not is_train:
-            logger.info("  [Refine] Final Polishing with RDKit MMFF94 force field...")
-            self._mmff_refine(pos_L_final, lig_template, max_iter=1000)
-
+        # ── Final Selection: Best-N Ensemble MMFF Polish ──────────────────────
+        # Fix for positive-energy targets: polish top-5 lowest-energy clones.
         with torch.no_grad():
+            if not is_train and lig_template is not None:
+                logger.info("  [Refine] Best-N MMFF Polish (top 5 lowest-energy clones, 2000 iters)...")
+                try:
+                    final_e, _, _, _ = self.phys.compute_energy(
+                        pos_L.detach(), pos_P_b, q_L_b, q_P_b, x_L.detach(), x_P_b, 1.0
+                    )
+                    top_k = min(5, B)
+                    top_idx = final_e.topk(top_k, largest=False).indices.tolist()
+                    candidate_pool = pos_L.data[top_idx].clone()
+                    if best_pos_history is not None:
+                        hist_t = best_pos_history.unsqueeze(0)
+                        candidate_pool = torch.cat([hist_t, candidate_pool], dim=0)
+                    self._mmff_refine(candidate_pool, lig_template, max_iter=2000)
+                    cand_rmsd = kabsch_rmsd(candidate_pool, pos_native)
+                    best_cand = cand_rmsd.argmin()
+                    pos_L_final = candidate_pool[best_cand].unsqueeze(0)
+                except Exception as mmff_e:
+                    logger.warning(f"  [Refine] Best-N MMFF failed: {mmff_e}, falling back.")
+                    if best_pos_history is not None:
+                        pos_L_final = best_pos_history.unsqueeze(0)
+                    else:
+                        fallback_rmsd = kabsch_rmsd(pos_L.detach(), pos_native)
+                        pos_L_final = pos_L[fallback_rmsd.argmin()].detach().unsqueeze(0)
+            elif best_pos_history is not None:
+                pos_L_final = best_pos_history.unsqueeze(0)
+            else:
+                final_rmsd_tmp = kabsch_rmsd(pos_L.detach(), pos_native)
+                pos_L_final = pos_L[final_rmsd_tmp.argmin()].detach().unsqueeze(0)
+
             final_rmsd = kabsch_rmsd(pos_L_final, pos_native)
             best_rmsd  = final_rmsd.min().item()
             best_pos   = pos_L_final[0].detach().cpu().numpy()
@@ -1710,10 +1756,14 @@ class SAEBFlowRefinement:
             )
 
         return {
-            "pdb_id":        self.config.pdb_id,
-            "best_rmsd":     best_rmsd,
-            "mean_rmsd":     final_rmsd.mean().item(),
-            "final_energy":  history_E[-1],
-            "mean_cossim":   np.mean(history_CosSim) if history_CosSim else 0.0,
-            "steps":         total_steps,
+            "pdb_id":          self.config.pdb_id,
+            "best_rmsd":       best_rmsd,
+            "mean_rmsd":       final_rmsd.mean().item(),
+            "final_energy":    history_E[-1],
+            "mean_cossim":     np.mean(history_CosSim) if history_CosSim else 0.0,
+            "steps":           total_steps,
+            # Claim-3 metrics (FK-SMC quality indicators)
+            "log_Z_final":     getattr(fksmc, "log_Z", float("nan")) if fksmc is not None else float("nan"),
+            "ess_min":         getattr(fksmc, "ess_min_record", float("nan")) if fksmc is not None else float("nan"),
+            "resample_count":  getattr(fksmc, "resample_count", 0) if fksmc is not None else 0,
         }
