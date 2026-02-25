@@ -3,6 +3,7 @@ import logging
 import time
 import csv
 import os
+import random
 import torch
 import numpy as np
 from saeb import SAEBFlowExperiment, SimulationConfig
@@ -71,6 +72,13 @@ DIFFDOCK_TIMESPLIT_362 = [
 def run_single_target(pdb_id, device_id, seed, args):
     """Worker function for single-target run."""
     device = f"cuda:{device_id}" if torch.cuda.is_available() and device_id >= 0 else "cpu"
+    # Keep runs reproducible across workers and retries.
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
     config = SimulationConfig(
         pdb_id=pdb_id,
         target_name=f"SAEB_{pdb_id}_G{device_id}_S{seed}",
@@ -106,14 +114,19 @@ def run_single_target(pdb_id, device_id, seed, args):
 def worker(q_in, q_out, gpu_id, args_copy):
     """Pickleable worker for torch.multiprocessing spawn.
     Sets CUDA_VISIBLE_DEVICES so this process only sees its own GPU.
-    This avoids cross-device tensor errors.
     """
     import os
+    import logging
+    # Spawned processes don't inherit logging config; must re-init.
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    logger = logging.getLogger(f"Worker-G{gpu_id}")
+    
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     while True:
         task = q_in.get()
         if task is None: break
         pdb_id, seed = task
+        logger.info(f" >>> Worker {gpu_id} starting task: {pdb_id} (Seed {seed})")
         # gpu_id within this process is always 0 (we only see one GPU)
         res = run_single_target(pdb_id, 0, seed, args_copy)
         q_out.put(res)
@@ -149,6 +162,8 @@ def main():
                         help="Fraction of worst-energy clones to MMFF-snap during mid-run (0,1]")
     parser.add_argument("--no_target_plots", action="store_true",
                         help="Skip per-target plotting to reduce benchmark overhead")
+    parser.add_argument("--no_aggregate_figures", action="store_true",
+                        help="Skip aggregate figure generation for faster sweeps")
     # Output
     parser.add_argument("--output_dir", type=str, default="results", help="Output directory")
     # Comparison
@@ -173,6 +188,9 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger("SAEB-Flow.CLI")
     os.makedirs(args.output_dir, exist_ok=True)
+    if args.mmff_snap_fraction < 0.0 or args.mmff_snap_fraction > 1.0:
+        logger.warning(f"mmff_snap_fraction={args.mmff_snap_fraction} out of range; clamping to [0,1].")
+        args.mmff_snap_fraction = min(1.0, max(0.0, args.mmff_snap_fraction))
 
     if args.high_fidelity:
         logger.info(f"High-fidelity mode: steps={args.steps}, B={args.batch_size}")
@@ -203,7 +221,8 @@ def main():
     logger.info(f"SAEB-Flow | targets={len(targets)} | seeds={len(seeds)} | total_tasks={len(tasks)} | "
                 f"steps={args.steps} | B={args.batch_size} | mode={args.mode} | "
                 f"kaggle={args.kaggle} | amp={args.amp} | compile={args.compile_backbone} | "
-                f"snap_frac={args.mmff_snap_fraction:.2f} | no_target_plots={args.no_target_plots}")
+                f"snap_frac={args.mmff_snap_fraction:.2f} | no_target_plots={args.no_target_plots} | "
+                f"no_aggregate_figures={args.no_aggregate_figures}")
 
     results_summary = []
 
@@ -309,7 +328,7 @@ def main():
         logger.error("No successful targets to aggregate.")
 
     # Generate aggregate figures
-    if len(successful) > 3:
+    if len(successful) > 3 and not args.no_aggregate_figures:
         try:
             from saeb.reporting.visualizer import PublicationVisualizer
             viz = PublicationVisualizer(output_dir=args.output_dir)
