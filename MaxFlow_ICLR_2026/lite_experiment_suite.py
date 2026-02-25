@@ -442,16 +442,12 @@ class PhysicsEngine(nn.Module):
         High force = Stay soft to resolve. Low force = Harden for precision.
         """
         with torch.no_grad():
-            self.max_force_ema = 0.99 * self.max_force_ema + 0.01 * force_magnitude
-            norm_force = force_magnitude / (self.max_force_ema + 1e-8)
-            norm_force = torch.clamp(torch.tensor(force_magnitude, device=self.current_alpha_buffer.device), 0.0, 1.0)
-            # sigmoid(5 * (x - 0.5)) -> 0.5 at midpoint. 
-            # If norm_force is small, decay is small -> hardening speeds up? 
-            # Wait, high force should SLOW DOWN hardening.
-            # sigmoid(5 * (0.5 - norm_force)) -> high force (norm=1) -> sigmoid(-2.5) -> small decay.
-            # low force (norm=0) -> sigmoid(2.5) -> high decay -> hardening accelerates.
+            # Bug Fix: Properly update max_force_ema and use it for normalization
+            self.max_force_ema = 0.99 * self.max_force_ema + 0.01 * float(force_magnitude)
+            norm_force = torch.clamp(torch.tensor(force_magnitude / (self.max_force_ema + 1e-8), 
+                                                device=self.current_alpha_buffer.device), 0.0, 1.0)
+            
             # Alpha Persistence: slower hardening for deep entry
-            # Shift threshold from 0.5 to 0.2 to delay hardening during high-force resolve
             decay = self.hardening_rate * torch.sigmoid(5.0 * (0.2 - norm_force))
             self.current_alpha = self.current_alpha * (1.0 - decay.item())
             # Maintain alpha >= 0.5 to ensure persistent soft-manifold penetration
@@ -534,9 +530,12 @@ class PhysicsEngine(nn.Module):
                  
                  q_L_exp = q_L.unsqueeze(2) # (B, N, 1)
                  q_P_exp = q_P.view(q_P.size(0), 1, -1)
-                 e_elec = (332.06 * q_L_exp * q_P_exp) / (dielectric * torch.sqrt(soft_dist_sq))
+                 e_elec_raw = (332.06 * q_L_exp * q_P_exp) / (dielectric * torch.sqrt(soft_dist_sq))
             else: # (N,)
-                 e_elec = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * torch.sqrt(soft_dist_sq))
+                 e_elec_raw = (332.06 * q_L.unsqueeze(1) * q_P.unsqueeze(0)) / (dielectric * torch.sqrt(soft_dist_sq))
+            
+            # Bug Fix: Tanh-Compression for Coulombic Gradients
+            e_elec = 200.0 * torch.tanh(e_elec_raw / 200.0)
             
             # vdW
             # Using registered buffers for device consistency

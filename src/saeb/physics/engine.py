@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import logging
+from rdkit import Chem
+from rdkit.Chem import AllChem
 from .config import ForceFieldParameters
 
 logger = logging.getLogger("SAEB-Flow.physics.engine")
@@ -210,3 +212,111 @@ class PhysicsEngine(nn.Module):
             clash = torch.clamp(1.2 - dist, min=0.0).pow(2)
             stretch = torch.clamp(dist - 1.8, min=0.0).pow(2)
             return 100.0 * ((clash + stretch) * mask).sum(dim=(1, 2))
+
+    def calculate_harmonic_tether(self, pos_P, pos_P_ref, k=10.0):
+        """
+        Induced Fit: Constrain protein atoms to their reference positions.
+        pos_P: (B, N_P, 3) Current positions
+        pos_P_ref: (B, N_P, 3) Original crystal positions
+        k: kcal/mol/A^2 force constant
+        """
+        diff = pos_P - pos_P_ref
+        dist_sq = diff.pow(2).sum(dim=-1)
+        return 0.5 * k * dist_sq.sum(dim=-1) # (B,)
+
+    def _prepare_mmff_mol(self, mol, pos):
+        """Return a molecule whose atom count/conformer matches the input coordinates."""
+        if mol is None:
+            return None
+        n = int(pos.shape[0])
+        m = mol
+        if m.GetNumAtoms() != n:
+            try:
+                m_heavy = Chem.RemoveHs(m)
+                if m_heavy.GetNumAtoms() == n:
+                    m = m_heavy
+                else:
+                    return None
+            except Exception:
+                return None
+        if m.GetNumConformers() == 0:
+            conf = Chem.Conformer(m.GetNumAtoms())
+            m.AddConformer(conf, assignId=True)
+        conf = m.GetConformer()
+        for i in range(min(n, m.GetNumAtoms())):
+            conf.SetAtomPosition(i, pos[i].tolist())
+        return m
+
+    def get_mmff_energy(self, mol, pos):
+        """
+        Calculates MMFF94 energy for a given conformer.
+        pos: (N, 3) tensor
+        """
+        mol_prep = self._prepare_mmff_mol(mol, pos)
+        if mol_prep is None:
+            return 0.0
+            
+        # Add Hs while keeping heavy-atom coordinates from the current pose.
+        mol_h = Chem.AddHs(mol_prep, addCoords=True)
+        if mol_h.GetNumConformers() == 0:
+            conf = Chem.Conformer(mol_h.GetNumAtoms())
+            mol_h.AddConformer(conf, assignId=True)
+        Chem.GetSymmSSSR(mol_h)
+            
+        ff = AllChem.MMFFGetMoleculeForceField(mol_h, AllChem.MMFFGetMoleculeProperties(mol_h))
+        if ff is None:
+            return 0.0
+        return ff.CalcEnergy()
+
+    def minimize_with_mmff(self, mol, pos, max_iter=200):
+        """
+        Performs MMFF94 minimization on the provided positions.
+        Falls back to UFF if MMFF94 cannot parameterize (e.g., phosphate groups).
+        pos: (N, 3) tensor
+        """
+        mol_prep = self._prepare_mmff_mol(mol, pos)
+        if mol_prep is None:
+            return pos.clone()
+
+        # Add Hs while preserving heavy-atom coordinates from the input pose.
+        mol_h = Chem.AddHs(mol_prep, addCoords=True)
+        if mol_h.GetNumConformers() == 0:
+            conf = Chem.Conformer(mol_h.GetNumAtoms())
+            mol_h.AddConformer(conf, assignId=True)
+        Chem.GetSymmSSSR(mol_h)
+
+        minimized = False
+        ff = AllChem.MMFFGetMoleculeForceField(mol_h, AllChem.MMFFGetMoleculeProperties(mol_h))
+        if ff:
+            # Fix heavy atoms: only optimize the added hydrogens and internal torsions
+            for i in range(mol_prep.GetNumAtoms()):
+                ff.AddFixedPoint(i)
+            ff.Minimize(maxIts=max_iter)
+            minimized = True
+
+        # P0-3 UFF Fallback: for molecules MMFF94 can't handle (phosphate, metals, etc.)
+        if not minimized:
+            uff = AllChem.UFFGetMoleculeForceField(mol_h)
+            if uff:
+                logger.debug("  [PhysicsEngine] MMFF94 unavailable, using UFF fallback")
+                # Fix heavy atoms, allow H to relax
+                for i in range(mol_prep.GetNumAtoms()):
+                    uff.AddFixedPoint(i)
+                uff.Minimize(maxIts=max_iter)
+                minimized = True
+
+        # If even UFF fails, do a full UFF optimization (no fixed atoms) for atoms with bad geometry
+        if not minimized:
+            uff_full = AllChem.UFFGetMoleculeForceField(mol_h)
+            if uff_full:
+                logger.debug("  [PhysicsEngine] Full UFF minimization (no fixed atoms)")
+                uff_full.Minimize(maxIts=max_iter * 2)
+
+        # Extract only heavy atoms back to tensor (matching input pos)
+        conf_h = mol_h.GetConformer()
+        new_pos = []
+        for i in range(mol_prep.GetNumAtoms()):
+            new_pos.append(list(conf_h.GetAtomPosition(i)))
+
+        return torch.tensor(new_pos, device=pos.device, dtype=pos.dtype)
+

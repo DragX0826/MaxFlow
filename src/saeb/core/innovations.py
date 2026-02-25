@@ -157,7 +157,7 @@ def run_with_recycling(model, recycling_encoder, pos_L, x_L, x_P, pos_P, h_P, t_
 
 def integrate_innovations(config, backbone, device):
     """Wires together all innovation components."""
-    from .model import ShortcutFlowHead, RecyclingEncoder # Local imports to avoid circularity
+    from .model import EquivariantFlowHead, RecyclingEncoder # Local imports to avoid circularity
     
     innovations = {
         'recycling_encoder': RecyclingEncoder(hidden_dim=64).to(device),

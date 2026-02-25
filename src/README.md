@@ -25,12 +25,29 @@ python run_benchmark.py --bench_astex --pdb_dir data/astex_pdb/ \
     --steps 300 --batch_size 16 --mode inference --seed 42
 ```
 
+### Astex-10 (FK-SMC + SOCM, v10.1)
+```bash
+# Canonical 10-target quick validation used for iteration loops
+python run_astex10_fksmc_socm.py \
+    --pdb_dir data/astex_pdb \
+    --steps 300 --batch_size 16 \
+    --seeds 42,43 \
+    --output_dir results/astex10_fksmc_socm_v10_1
+```
+
 ### Kaggle (T4 x2)
 ```bash
 # Use the provided notebook: kaggle_notebook.ipynb
 # Required datasets:
 #   - astex-diverse   (upload from data/astex_pdb/ after running download_astex.py)
 #   - saeb-flow-src   (this repo)
+
+# Or run directly in a Kaggle notebook cell:
+python run_astex10_fksmc_socm.py \
+    --pdb_dir /kaggle/input/astex-diverse \
+    --num_gpus 2 \
+    --kaggle \
+    --seeds 42,43
 ```
 
 ---
@@ -89,6 +106,11 @@ For best results on Kaggle T4 x 2, our infrastructure supports:
 ```bash
 # Example High-Performance Run
 python run_benchmark.py --bench_astex --high_fidelity --seeds 42,43 --num_gpus 2
+```
+
+`run_benchmark.py` also supports custom subsets via:
+```bash
+python run_benchmark.py --targets 1aq1,1b8o,1cvu --fksmc --socm
 ```
 
 ---

@@ -38,7 +38,11 @@ class RealPDBFeaturizer:
             'ALA':0,'ARG':1,'ASN':2,'ASP':3,'CYS':4,
             'GLN':5,'GLU':6,'GLY':7,'HIS':8,'ILE':9,
             'LEU':10,'LYS':11,'MET':12,'PHE':13,'PRO':14,
-            'SER':15,'THR':16,'TRP':17,'TYR':18,'VAL':19
+            'SER':15,'THR':16,'TRP':17,'TYR':18,'VAL':19,
+            # Nucleic Acids (Imp 4 v8.0)
+            'A':20, 'U':21, 'G':22, 'C':23, 'T':24, # RNA/DNA single
+            'DA':20, 'DU':21, 'DG':22, 'DC':23, 'DT':24, # DNA double
+            'ADE':20, 'URA':21, 'GUA':22, 'CYT':23, 'THY':24, # 3-letter
         }
         self.esm_dim = 1280
         self.config = config
@@ -138,10 +142,10 @@ class RealPDBFeaturizer:
                                 coords.append(atom.get_coord())
                                 atom_oh = [0.0] * 4
                                 e = atom.element if atom.element in type_map else 'C'
-                                atom_oh[type_map[e]] = 1.0
+                                atom_oh[type_map.get(e, 0)] = 1.0 # Safer get
                                 
-                                res_oh = [0.0] * 21
-                                res_oh[self.aa_map[res.get_resname()]] = 1.0
+                                res_oh = [0.0] * 26 # Expanded for NA (Imp 4 v8.0)
+                                res_oh[self.aa_map[res.get_resname().strip()]] = 1.0
                                 
                                 feats.append(atom_oh + res_oh)
                                 atom_to_res_idx.append(len(res_sequences))
@@ -157,17 +161,21 @@ class RealPDBFeaturizer:
                                 res_char = 'X'
                             res_sequences.append(res_char)
                             
-                        elif res.id[0].startswith('H_') and res.get_resname() not in ['HOH', 'WAT', 'NA', 'CL', 'MG', 'ZN', 'SO4', 'PO4']:
+                        elif res.get_resname() not in ['HOH', 'WAT', 'NA', 'CL', 'MG', 'ZN', 'SO4', 'PO4', 'K']:
+                             # Robust Ligand Detection (Imp 6 v8.0)
+                             # Check for non-standard residues that have >5 atoms
                              candidate_atoms = []
                              for atom in res:
-                                 candidate_atoms.append(atom.get_coord())
+                                 if atom.element != 'H':
+                                     candidate_atoms.append(atom.get_coord())
                              
-                             if len(candidate_atoms) > 1:
+                             if len(candidate_atoms) > 4: # Small molecule threshold
+                                 # If multiple candidates, pick the largest
                                  if len(candidate_atoms) > len(native_ligand):
                                      native_ligand = candidate_atoms
                                      native_elements = [a.element.strip().upper() for a in res if a.element != 'H']
                                      native_resname = res.get_resname()
-                                     logger.info(f"    [Data] Found dominant ligand {native_resname} with {len(native_ligand)} atoms.")
+                                     logger.info(f"    [Data] Found dominant ligand {native_resname} with {len(native_ligand)} heavy atoms.")
             
             if not native_ligand:
                 logger.warning(f"No ligand found in {pdb_id}. Creating mock cloud.")
@@ -188,12 +196,16 @@ class RealPDBFeaturizer:
                     esm_feat = esm_feat[..., :1280]
                 esm_feat = esm_feat.to(self.device)  # ensure on correct device
                 
-                atom_esm = [esm_feat[idx] for idx in atom_to_res_idx]
+                atom_esm = [esm_feat[idx] if idx < len(esm_feat) else torch.zeros(1280, device=self.device) for idx in atom_to_res_idx]
                 # Move both tensors to device BEFORE concatenation
                 atom_oh_t = torch.tensor(np.array(feats), dtype=torch.float32)[:, :4].to(self.device)
                 x_P_all = torch.cat([atom_oh_t, torch.stack(atom_esm)], dim=-1)
             else:
-                x_P_all = torch.tensor(np.array(feats), dtype=torch.float32).to(self.device)
+                # Handle extended One-Hot padding for missing ESM
+                x_full = np.array(feats)
+                x_P_all = torch.tensor(x_full, dtype=torch.float32).to(self.device)
+                if x_P_all.size(-1) < 1284:
+                    x_P_all = F.pad(x_P_all, (0, 1284 - x_P_all.size(-1)))
 
             if len(native_ligand) > 0:
                 pos_native = torch.tensor(np.array(native_ligand), dtype=torch.float32).to(self.device)
@@ -231,11 +243,23 @@ class RealPDBFeaturizer:
                 mol_full = Chem.MolFromPDBFile(path, removeHs=False, sanitize=False)
                 if mol_full:
                     res_mols = Chem.SplitMolByPDBResidues(mol_full)
+                    # Priority 1: Match by ResName (Robust for multi-ligand PDBs)
                     for rm in res_mols.values():
-                        if rm.GetNumAtoms() == len(native_ligand):
-                            ligand_template = rm
-                            logger.info(f"    Successfully extracted ligand template ({native_resname}).")
-                            break
+                        # Peek first atom to check residue name
+                        if rm.GetNumAtoms() > 0:
+                            p_info = rm.GetAtomWithIdx(0).GetPDBResidueInfo()
+                            if p_info and p_info.GetResidueName().strip() == native_resname.strip():
+                                ligand_template = rm
+                                logger.info(f"    Successfully matched ligand template by residue name ({native_resname}).")
+                                break
+                    
+                    # Priority 2: Fallback to atom count (Legacy)
+                    if ligand_template is None:
+                        for rm in res_mols.values():
+                            if rm.GetNumAtoms() == len(native_ligand):
+                                ligand_template = rm
+                                logger.info(f"    Matched ligand template by atom count ({len(native_ligand)}).")
+                                break
             except Exception as template_err:
                 logger.warning(f"    Template extraction failed: {template_err}.")
 

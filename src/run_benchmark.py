@@ -79,7 +79,12 @@ def run_single_target(pdb_id, device_id, seed, args):
         mode=args.mode,
         pdb_dir=args.pdb_dir,
         seed=seed,
+        fksmc=args.fksmc,
+        socm=args.socm,
+        srpg=args.srpg,
+        no_backbone=getattr(args, "no_backbone", False),  # B6
     )
+
     t0 = time.time()
     try:
         experiment = SAEBFlowExperiment(config)
@@ -113,6 +118,8 @@ def worker(q_in, q_out, gpu_id, args_copy):
 def main():
     parser = argparse.ArgumentParser(description="SAEB-Flow Benchmark — Astex Diverse 85 / DiffDock-362")
     # Target selection
+    parser.add_argument("--targets", type=str, default=None,
+                        help="Comma-separated PDB IDs. Overrides --pdb_id/--bench_*.")
     parser.add_argument("--pdb_id", type=str, default=None, help="Single target PDB ID")
     parser.add_argument("--bench_astex", action="store_true", help="Astex Diverse Set (85 targets)")
     parser.add_argument("--bench_diffdock", action="store_true", help="DiffDock time-split (362 targets)")
@@ -137,7 +144,15 @@ def main():
                         help="Comma-separated list of CSVs to compare (e.g. 'results1.csv,results2.csv')")
     parser.add_argument("--compare_labels", type=str, default=None,
                         help="Comma-separated labels for comparison (e.g. 'Full,No-Physics')")
+    # v9.0 Mathematical Foundations
+    parser.add_argument("--fksmc", action="store_true", help="Enable Feynman-Kac SMC Resampling")
+    parser.add_argument("--socm",  action="store_true", help="Enable SOCM-Inspired Twist Force")
+    parser.add_argument("--srpg",  action="store_true", help="Enable Self-Rewarding Particle Gibbs")
+    # B6: ablation flag
+    parser.add_argument("--no_backbone", action="store_true",
+                        help="B6/P0-2: Pure physics ablation baseline (skip neural backbone)")
     args = parser.parse_args()
+
 
     if args.high_fidelity:
         if args.steps == 300:   args.steps = 1000
@@ -151,7 +166,9 @@ def main():
         logger.info(f"High-fidelity mode: steps={args.steps}, B={args.batch_size}")
 
     # Select targets
-    if args.pdb_id:
+    if args.targets:
+        targets = [t.strip().lower() for t in args.targets.split(",") if t.strip()]
+    elif args.pdb_id:
         targets = [args.pdb_id.lower()]
     elif args.bench_diffdock:
         targets = DIFFDOCK_TIMESPLIT_362
@@ -220,17 +237,26 @@ def main():
 
         for p in processes: p.join()
 
-    # CSV output
+    # B3 fix: expanded CSV fieldnames with Claim-1/3 metrics
     csv_path = os.path.join(args.output_dir, "benchmark_results.csv")
     successful = [r for r in results_summary if r["status"] == "Success"]
     with open(csv_path, "w", newline="") as f:
-        fieldnames = ["pdb_id", "best_rmsd", "mean_rmsd", "final_energy", "steps", "time_sec"]
+        fieldnames = [
+            "pdb_id", "seed",
+            "best_rmsd", "mean_rmsd", "final_energy",
+            "log_Z_final", "ess_min", "resample_count", "pb_valid_frac",
+            "steps", "time_sec",
+        ]
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for r in successful:
             row = r["results"].copy()
-            row.setdefault("time_sec", 0)  # already set by run_single_target
+            row["seed"] = r.get("seed", row.get("seed", 0))
+            for k in ("log_Z_final", "ess_min", "resample_count", "pb_valid_frac"):
+                row.setdefault(k, "")
+            row.setdefault("time_sec", 0)
             writer.writerow(row)
+
 
     # Final report
     n_tot = len(targets)

@@ -8,7 +8,49 @@ from ..utils.esm import get_esm_model
 
 logger = logging.getLogger("SAEB-Flow.core.model")
 
-# --- 1. ENCODERS & PERCEPTION ---
+# --- 0. GEOMETRIC VECTOR PERCEPTRONS (GVP) Core ---
+
+class GVP(nn.Module):
+    """
+    Geometric Vector Perceptron (Jing et al. 2021).
+    Handles (s, V) pairs where s is scalar and V is vector features.
+    Guarantees SE(3) equivariance.
+    """
+    def __init__(self, in_dims, out_dims, vector_gate=True):
+        super().__init__()
+        self.si, self.vi = in_dims
+        self.so, self.vo = out_dims
+        self.vector_gate = vector_gate
+        
+        self.v_proj = nn.Linear(self.vi, self.vo, bias=False)
+        self.s_proj = nn.Sequential(
+            nn.Linear(self.si + self.vo, self.so),
+            nn.SiLU(),
+            nn.Linear(self.so, self.so)
+        )
+        if vector_gate:
+            self.gate_proj = nn.Linear(self.si + self.vo, self.vo)
+        
+    def forward(self, s, V):
+        """
+        s: (B, N, si)
+        V: (B, N, vi, 3)
+        """
+        # Vector transformation
+        V_out = self.v_proj(V.transpose(-1, -2)).transpose(-1, -2) # (B, N, vo, 3)
+        v_norm = torch.norm(V_out, dim=-1, keepdim=False)  # (B, N, vo)
+        
+        # Scalar transformation with norm-based awareness
+        s_combined = torch.cat([s, v_norm], dim=-1)
+        s_out = self.s_proj(s_combined)
+        
+        # Vector gating for non-linearity
+        if self.vector_gate:
+            gate = torch.sigmoid(self.gate_proj(s_combined)).unsqueeze(-1)
+            V_out = V_out * gate
+            
+        return s_out, V_out
+
 
 class SinusoidalTimeEmbedding(nn.Module):
     """
@@ -70,55 +112,75 @@ class StructureSequenceEncoder(nn.Module):
 
 
 class GVPAdapter(nn.Module):
-    """Cross-Attention for Protein-Ligand interaction with distance bias."""
+    """
+    Equivariant Cross-Attention with Vector support.
+    Uses relative vectors (pos_L - pos_P) to populate vector channels.
+    """
     def __init__(self, hidden_dim):
         super().__init__()
+        self.gvp = GVP((hidden_dim, 1), (hidden_dim, 1)) # Scalar + 1 Vector (relative pos)
         self.q_proj = nn.Linear(hidden_dim, hidden_dim)
         self.k_proj = nn.Linear(hidden_dim, hidden_dim)
         self.v_proj = nn.Linear(hidden_dim, hidden_dim)
         self.scale = hidden_dim ** 0.5
 
-    def forward(self, x_L, x_P, dist_lp):
+    def forward(self, x_L, x_P, pos_L, pos_P):
         """
-        x_L: (B, N_L, D), x_P: (B, N_P, D), dist_lp: (B, N_L, N_P)
+        x_L: (B, N_L, D), x_P: (B, N_P, D)
+        pos_L: (B, N_L, 3), pos_P: (B, N_P, 3)
         """
+        # Compute pairwise distance bias
+        diff = pos_L.unsqueeze(2) - pos_P.unsqueeze(1) # (B, N_L, N_P, 3)
+        dist = torch.norm(diff, dim=-1)               # (B, N_L, N_P)
+        
+        # 1. Scalar Attention
         q = self.q_proj(x_L)
         k = self.k_proj(x_P)
         v = self.v_proj(x_P)
         
-        # Distance-gated attention bias (mask out atoms > 10A)
-        attn_bias = -1e9 * (dist_lp > 10.0).float()
+        attn_bias = -1e9 * (dist > 10.0).float()
         scores = torch.bmm(q, k.transpose(-1, -2)) / self.scale + attn_bias
         probs = F.softmax(scores, dim=-1)
-        context = torch.bmm(probs, v)
-        return x_L + context, probs
+        
+        # 2. Vector Aggregation (The Equivariant Part)
+        # Aggregated context vector V = sum(weights * relative_directions)
+        # We normalize direction to maintain scale stability
+        direction = diff / (dist.unsqueeze(-1) + 1e-6)
+        V_agg = torch.einsum('bnp, bnpk -> bnk', probs, direction).unsqueeze(2) # (B, N_L, 1, 3)
+        
+        # 3. Scalar Context
+        s_context = torch.bmm(probs, v)
+        
+        # 4. Refine with GVP
+        s_out, V_out = self.gvp(x_L + s_context, V_agg)
+        return s_out, V_out, probs
 
 
 # --- 2. INNOVATIONS (CBSF) ---
 
-class ShortcutFlowHead(nn.Module):
+class EquivariantFlowHead(nn.Module):
     """
-    Confidence-Bootstrapped Shortcut Flow (CBSF) Head.
-    Predicts tangent velocity, absolute endpoint (shortcut), and confidence.
+    Equivariant Head using GVP.
+    Predicts velocity (v_pred) and endpoint (x1_pred) as vector features.
     """
     def __init__(self, hidden_dim):
         super().__init__()
-        self.gn = nn.GroupNorm(min(8, hidden_dim), hidden_dim)
-        self.v_proj = nn.Linear(hidden_dim, 3, bias=False)
-        self.x1_proj = nn.Linear(hidden_dim, 3)
+        self.gvp = GVP((hidden_dim, 1), (hidden_dim, 2)) # Out 2 vectors
         self.conf_proj = nn.Sequential(
             nn.Linear(hidden_dim, 1),
             nn.Sigmoid()
         )
 
-    def forward(self, h, pos_L=None):
-        """h: (B, N, D), pos_L: (B, N, 3)"""
-        h_norm = self.gn(h.transpose(1, 2)).transpose(1, 2)  # GroupNorm over channels
-        v_pred = self.v_proj(h_norm)
-        x1_delta = self.x1_proj(h_norm)
+    def forward(self, h, V_in, pos_L=None):
+        """h: (B, N, D), V_in: (B, N, 1, 3), pos_L: (B, N, 3)"""
+        s_out, V_out = self.gvp(h, V_in) # V_out: (B, N, 2, 3)
+        
+        v_pred = V_out[:, :, 0, :]
+        x1_delta = V_out[:, :, 1, :]
         x1_pred = (pos_L + x1_delta) if pos_L is not None else x1_delta
-        conf = self.conf_proj(h)
-        return {'v_pred': v_pred, 'x1_pred': x1_pred, 'confidence': conf}
+        
+        conf = self.conf_proj(s_out)
+        return {'v_pred': v_pred, 'x1_pred': x1_pred, 'confidence': conf, 'latent': s_out}
 
 
 class RecyclingEncoder(nn.Module):
@@ -175,7 +237,7 @@ class SAEBFlowBackbone(nn.Module):
         self.reasoning = nn.ModuleList([
             PermutationInvariantBlock(hidden_dim) for _ in range(num_layers)
         ])
-        self.head = ShortcutFlowHead(hidden_dim)
+        self.head = EquivariantFlowHead(hidden_dim)
 
     def forward(self, x_L, x_P, pos_L, pos_P, t, prev_pos_L=None, prev_latent=None):
         """
@@ -201,17 +263,17 @@ class SAEBFlowBackbone(nn.Module):
         if prev_pos_L is not None and prev_latent is not None:
             h = self.recycling(prev_pos_L, h)
         
-        # 3. Protein perception + cross-attention
+        # 3. Protein perception + cross-attention (Equivariant)
         h_P = self.perception(x_P)                 # (B, N_P, D)
-        dist_lp = torch.norm(pos_L.unsqueeze(2) - pos_P.unsqueeze(1), dim=-1)
-        h, _ = self.cross_attn(h, h_P, dist_lp)
+        h, V, _ = self.cross_attn(h, h_P, pos_L, pos_P) # h: (B,N,D), V: (B,N,1,3)
         
-        # 4. Self-attention reasoning (permutation invariant)
+        # 4. Self-attention reasoning (permutation invariant on scalars)
+        # V remains equivariant as it is not touched by LayerNorm/Linear on its x,y,z dims
         for layer in self.reasoning:
             h = layer(h)
         
-        # 5. Policy heads — output is (B, N, *)
-        out = self.head(h, pos_L=pos_L)
+        # 5. Equivariant head — outputs are naturally SE(3) equivariant
+        out = self.head(h, V, pos_L=pos_L)
         out['latent'] = h  # for recycling
         return out
 

@@ -50,5 +50,12 @@ class SimulationConfig:
     no_cbsf: bool = False
     no_pidrift: bool = False
     
+    # v9.0 Mathematical Foundations
+    fksmc: bool = False
+    socm: bool = False
+    srpg: bool = False
+    # v10.0 Ablation flags (B4 fix)
+    no_backbone: bool = False
+    
     def to_dict(self):
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
