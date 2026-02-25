@@ -1762,8 +1762,8 @@ class SAEBFlowRefinement:
             "final_energy":    history_E[-1],
             "mean_cossim":     np.mean(history_CosSim) if history_CosSim else 0.0,
             "steps":           total_steps,
-            # Claim-3 metrics (FK-SMC quality indicators)
-            "log_Z_final":     getattr(fksmc, "log_Z", float("nan")) if fksmc is not None else float("nan"),
-            "ess_min":         getattr(fksmc, "ess_min_record", float("nan")) if fksmc is not None else float("nan"),
-            "resample_count":  getattr(fksmc, "resample_count", 0) if fksmc is not None else 0,
+            # Claim-3 metrics — fksmc is a local in refine(); use locals().get() for safety
+            "log_Z_final":     getattr(locals().get("fksmc"), "log_Z", float("nan")),
+            "ess_min":         getattr(locals().get("fksmc"), "ess_min_record", float("nan")),
+            "resample_count":  getattr(locals().get("fksmc"), "resample_count", 0),
         }
