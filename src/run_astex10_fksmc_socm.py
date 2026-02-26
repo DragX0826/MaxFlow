@@ -54,6 +54,8 @@ def main():
                         help="Final MMFF max iterations")
     parser.add_argument("--no_pose_dump", action="store_true",
                         help="Skip writing best pose PDB files")
+    parser.add_argument("--adaptive_stop_thresh", type=float, default=0.05,
+                        help="Adaptive early-stop threshold (lower = run longer)")
     parser.add_argument("--output_dir", type=str, default="results/astex10_fksmc_socm")
     args = parser.parse_args()
 
@@ -85,6 +87,8 @@ def main():
         str(args.final_mmff_topk),
         "--final_mmff_max_iter",
         str(args.final_mmff_max_iter),
+        "--adaptive_stop_thresh",
+        str(args.adaptive_stop_thresh),
     ]
 
     if args.pdb_dir:

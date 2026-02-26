@@ -25,6 +25,19 @@ class PhysicsEngine(nn.Module):
         
         self.hardening_rate = 0.1
         self.max_force_ema = 1.0
+        self.reset_mmff_stats()
+
+    def reset_mmff_stats(self):
+        """Reset per-run MMFF fallback counters for reporting."""
+        self._mmff_stats = {
+            "attempts": 0,
+            "mmff_success": 0,
+            "fallback_used": 0,
+            "failed_all": 0,
+        }
+
+    def get_mmff_stats(self):
+        return dict(self._mmff_stats)
 
     @property
     def current_alpha(self):
@@ -282,6 +295,7 @@ class PhysicsEngine(nn.Module):
         mol_prep = self._prepare_mmff_mol(mol, pos)
         if mol_prep is None:
             return pos.clone()
+        self._mmff_stats["attempts"] += 1
 
         # Add Hs while preserving heavy-atom coordinates from the input pose.
         mol_h = Chem.AddHs(mol_prep, addCoords=True)
@@ -291,6 +305,7 @@ class PhysicsEngine(nn.Module):
         Chem.GetSymmSSSR(mol_h)
 
         minimized = False
+        mmff_ok = False
         try:
             props = AllChem.MMFFGetMoleculeProperties(mol_h)
             ff = AllChem.MMFFGetMoleculeForceField(mol_h, props) if props is not None else None
@@ -304,6 +319,8 @@ class PhysicsEngine(nn.Module):
                     ff.AddFixedPoint(i)
                 ff.Minimize(maxIts=max_iter)
                 minimized = True
+                mmff_ok = True
+                self._mmff_stats["mmff_success"] += 1
             except Exception as e:
                 logger.warning(f"  [PhysicsEngine] MMFF minimization failed, trying UFF fallback: {e}")
 
@@ -328,9 +345,14 @@ class PhysicsEngine(nn.Module):
                 logger.debug("  [PhysicsEngine] Full UFF minimization (no fixed atoms)")
                 try:
                     uff_full.Minimize(maxIts=max_iter * 2)
+                    minimized = True
                 except Exception as e:
                     logger.warning(f"  [PhysicsEngine] Full UFF minimization failed: {e}")
-                    return pos.clone()
+        if not mmff_ok:
+            self._mmff_stats["fallback_used"] += 1
+        if not minimized:
+            self._mmff_stats["failed_all"] += 1
+            return pos.clone()
 
         # Extract only heavy atoms back to tensor (matching input pos)
         conf_h = mol_h.GetConformer()

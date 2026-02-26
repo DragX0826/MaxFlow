@@ -65,6 +65,7 @@ class SimulationConfig:
     final_mmff_topk: int = 5
     final_mmff_max_iter: int = 2000
     no_pose_dump: bool = False
+    adaptive_stop_thresh: float = 0.05
     
     def to_dict(self):
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}

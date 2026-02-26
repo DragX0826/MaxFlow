@@ -1163,6 +1163,7 @@ class SAEBFlowRefinement:
         # Set device on featurizer immediately so ESM and all tensors are on right GPU
         self.featurizer.device = device
         self.phys = self.phys.to(device)
+        self.phys.reset_mmff_stats()
 
         # Bug Fix A: Correctly unpack q_P (protein charges)
         pos_P, x_P, q_P, (p_center, pos_native), x_L_native, q_L_native, lig_template = \
@@ -1192,6 +1193,7 @@ class SAEBFlowRefinement:
                 device=device,
                 mol_template=lig_template,
                 steps=self.config.steps,
+                adaptive_stop_thresh=getattr(self.config, "adaptive_stop_thresh", 0.05),
                 use_fksmc=use_fksmc,
                 use_socm_twist=use_socm_twist,
                 use_srpg=use_srpg,
@@ -1211,6 +1213,9 @@ class SAEBFlowRefinement:
 
             history_E = refine_out.get("history_E", [])
             final_energy = float(history_E[-1]) if history_E else float("nan")
+            mmff_stats = self.phys.get_mmff_stats()
+            attempts = max(1, int(mmff_stats.get("attempts", 0)))
+            mmff_fallback_rate = float(mmff_stats.get("fallback_used", 0)) / attempts
 
             print(f"\n{'='*55}")
             print(f" {self.config.pdb_id:8s}  best={best_rmsd:.2f}A  "
@@ -1233,6 +1238,7 @@ class SAEBFlowRefinement:
                 "log_Z_final":     refine_out.get("log_Z_final", float("nan")),
                 "ess_min":         refine_out.get("ess_min", float("nan")),
                 "resample_count":  refine_out.get("resample_count", 0),
+                "mmff_fallback_rate": mmff_fallback_rate,
             }
 
         # ── Ligand ensemble initialisation ──────────────────────────────────
@@ -1837,6 +1843,9 @@ class SAEBFlowRefinement:
                 history_CosSim, filename=f"align_{self.config.pdb_id}.pdf"
             )
 
+        mmff_stats = self.phys.get_mmff_stats()
+        attempts = max(1, int(mmff_stats.get("attempts", 0)))
+        mmff_fallback_rate = float(mmff_stats.get("fallback_used", 0)) / attempts
         return {
             "pdb_id":          self.config.pdb_id,
             "best_rmsd":       best_rmsd,
@@ -1847,4 +1856,5 @@ class SAEBFlowRefinement:
             "log_Z_final":     float("nan"),
             "ess_min":         float("nan"),
             "resample_count":  0,
+            "mmff_fallback_rate": mmff_fallback_rate,
         }
