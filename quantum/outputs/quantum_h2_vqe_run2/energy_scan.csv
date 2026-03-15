@@ -1,0 +1,10 @@
+bond_length_angstrom,vqe_energy,exact_energy,uff_energy,abs_vqe_minus_exact,mode
+0.3,,,78.95817540735257,,fallback_single_point
+0.575,,,8.390349653863058,,fallback_single_point
+0.8500000000000001,-1.8572746151403048,-1.8572750302023804,9.564306089688223,4.1506207559827146e-07,fallback_single_point
+1.125,,,82.48004471482804,,fallback_single_point
+1.4000000000000001,,,227.13756552928263,,fallback_single_point
+1.675,,,443.53686853305175,,fallback_single_point
+1.9500000000000002,,,731.6779537261358,,fallback_single_point
+2.225,,,1091.5608211085341,,fallback_single_point
+2.5,,,1523.1854706802474,,fallback_single_point
