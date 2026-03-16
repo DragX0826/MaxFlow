@@ -1378,10 +1378,10 @@ class SAEBFlowRefinement:
 
         final_energy_t = torch.tensor(final_scores, device=device, dtype=torch.float32)
         clash_final = self.phys.calculate_internal_geometry_score(best_pos).float()
-        selection_score_name = str(getattr(self.config, "selection_score", "energy")).strip().lower()
+        selection_score_name = str(getattr(self.config, "selection_score", "clash")).strip().lower()
         score_map = _build_selection_scores(rank_signal, final_energy_t, clash_final)
         if selection_score_name not in score_map:
-            selection_score_name = "energy"
+            selection_score_name = "clash"
         rank_scores = score_map[selection_score_name]
         rank_order = torch.argsort(rank_scores, descending=True)
         rank_proxy_final = float(rank_scores[rank_order[0]].item()) if rank_order.numel() else float("nan")
@@ -1604,7 +1604,7 @@ class SAEBFlowRefinement:
                 "rank_top1_hit": refine_out.get("rank_top1_hit", float("nan")),
                 "rank_top3_hit": refine_out.get("rank_top3_hit", float("nan")),
                 "ranked_rmsd": refine_out.get("ranked_rmsd", float("nan")),
-                "selection_score": refine_out.get("selection_score", getattr(self.config, "selection_score", "energy")),
+                "selection_score": refine_out.get("selection_score", getattr(self.config, "selection_score", "clash")),
                 "qm_candidate_dir": qm_candidate_dir or "",
             }
 
@@ -2231,5 +2231,5 @@ class SAEBFlowRefinement:
             "rank_top1_hit": float("nan"),
             "rank_top3_hit": float("nan"),
             "ranked_rmsd": float("nan"),
-            "selection_score": getattr(self.config, "selection_score", "energy"),
+            "selection_score": getattr(self.config, "selection_score", "clash"),
         }

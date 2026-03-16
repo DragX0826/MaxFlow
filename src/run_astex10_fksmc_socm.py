@@ -62,7 +62,7 @@ def main():
                         help="Patience fraction for adaptive stop")
     parser.add_argument("--rerank_polish_mult", type=int, default=2,
                         help="Second-stage rerank polish multiplier")
-    parser.add_argument("--selection_score", type=str, default="energy",
+    parser.add_argument("--selection_score", type=str, default="clash",
                         choices=["hybrid", "logz", "energy", "clash", "energy_clash"],
                         help="Score used to select the final pose from refined particles")
     parser.add_argument("--dump_candidate_topk", type=int, default=0,

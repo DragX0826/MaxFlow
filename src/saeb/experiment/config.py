@@ -69,7 +69,7 @@ class SimulationConfig:
     adaptive_min_step_frac: float = 0.65
     adaptive_patience_frac: float = 0.12
     rerank_polish_mult: int = 2
-    selection_score: str = "energy"
+    selection_score: str = "clash"
     dump_candidate_topk: int = 0
     artifact_dir: str = ""
     quiet: bool = False
