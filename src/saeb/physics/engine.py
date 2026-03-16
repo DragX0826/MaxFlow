@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import logging
+import math
 from rdkit import Chem
 from rdkit.Chem import AllChem
 from .config import ForceFieldParameters
@@ -310,6 +311,16 @@ class PhysicsEngine(nn.Module):
             logger.debug(f"  [PhysicsEngine] MMFF forcefield init failed: {e}")
             return None
 
+    def _sanitize_forcefield_energy(self, energy: float, source: str = "MMFF") -> float:
+        """Reject non-finite or implausibly large force-field energies."""
+        if not math.isfinite(energy):
+            logger.debug(f"  [PhysicsEngine] {source} energy non-finite; ignoring contribution.")
+            return 0.0
+        if abs(energy) > 5_000.0:
+            logger.warning(f"  [PhysicsEngine] {source} energy outlier ({energy:.2e}); ignoring contribution.")
+            return 0.0
+        return float(energy)
+
     def get_mmff_energy(self, mol, pos):
         """
         Calculates MMFF94 energy for a given conformer.
@@ -323,7 +334,7 @@ class PhysicsEngine(nn.Module):
             ff = self._build_mmff_forcefield(ff_target)
             if ff is None:
                 return 0.0
-            return float(ff.CalcEnergy())
+            return self._sanitize_forcefield_energy(float(ff.CalcEnergy()), source="MMFF")
         except Exception as e:
             logger.debug(f"  [PhysicsEngine] MMFF energy failed: {e}")
             return 0.0

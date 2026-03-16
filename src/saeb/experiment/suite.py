@@ -130,6 +130,15 @@ def _build_selection_scores(rank_signal: torch.Tensor, final_energy_t: torch.Ten
     }
 
 
+def _safe_scalar_energy(value: float, limit: float = 5000.0) -> float:
+    """Guard scalar energies used for final reranking/reporting."""
+    if not math.isfinite(value):
+        return 0.0
+    if abs(value) > limit:
+        return 0.0
+    return float(value)
+
+
 def _write_pose_sdf(mol_template, coords: np.ndarray, path: str) -> None:
     """Save one ligand pose as SDF for downstream rescoring tools."""
     mol = Chem.Mol(mol_template)
@@ -1366,15 +1375,16 @@ class SAEBFlowRefinement:
                 best_pos[i] = self.phys.minimize_with_mmff(mol_template, best_pos[i], max_iter=mmff_iter)
             for i in range(B):
                 mmff_e = self.phys.get_mmff_energy(mol_template, best_pos[i]) if i in polish_set else 0.0
+                mmff_e = _safe_scalar_energy(mmff_e)
                 inter_e, _, _, _ = self.phys.compute_energy(
                     best_pos[i:i+1], pos_P_active[i:i+1], q_L_b[i:i+1], q_P_b[i:i+1], x_L_b[i:i+1], x_P_b[i:i+1], 1.0
                 )
-                final_scores.append(mmff_e + inter_e.item())
+                final_scores.append(_safe_scalar_energy(mmff_e + inter_e.item()))
         else:
             inter_only, _, _, _ = self.phys.compute_energy(
                 best_pos, pos_P_active, q_L_b, q_P_b, x_L_b, x_P_b, 1.0
             )
-            final_scores = inter_only.detach().tolist()
+            final_scores = [_safe_scalar_energy(float(v)) for v in inter_only.detach().tolist()]
 
         final_energy_t = torch.tensor(final_scores, device=device, dtype=torch.float32)
         clash_final = self.phys.calculate_internal_geometry_score(best_pos).float()
