@@ -62,9 +62,11 @@ def main():
                         help="Patience fraction for adaptive stop")
     parser.add_argument("--rerank_polish_mult", type=int, default=2,
                         help="Second-stage rerank polish multiplier")
-    parser.add_argument("--selection_score", type=str, default="hybrid",
+    parser.add_argument("--selection_score", type=str, default="energy",
                         choices=["hybrid", "logz", "energy", "clash", "energy_clash"],
                         help="Score used to select the final pose from refined particles")
+    parser.add_argument("--dump_candidate_topk", type=int, default=0,
+                        help="If >0, dump top-k candidate poses and metadata for downstream rescoring")
     parser.add_argument("--quiet", action="store_true",
                         help="Reduce terminal output noise")
     parser.add_argument("--output_dir", type=str, default="results/astex10_fksmc_socm")
@@ -108,6 +110,8 @@ def main():
         str(args.rerank_polish_mult),
         "--selection_score",
         str(args.selection_score),
+        "--dump_candidate_topk",
+        str(args.dump_candidate_topk),
     ]
 
     if args.pdb_dir:

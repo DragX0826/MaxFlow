@@ -1,4 +1,5 @@
 import math
+import csv
 from typing import Tuple
 import torch
 import torch.nn as nn
@@ -127,6 +128,120 @@ def _build_selection_scores(rank_signal: torch.Tensor, final_energy_t: torch.Ten
         "clash": clash_score,
         "energy_clash": 0.7 * energy_score + 0.3 * clash_score,
     }
+
+
+def _write_pose_sdf(mol_template, coords: np.ndarray, path: str) -> None:
+    """Save one ligand pose as SDF for downstream rescoring tools."""
+    mol = Chem.Mol(mol_template)
+    if mol.GetNumConformers() == 0:
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        mol.AddConformer(conf, assignId=True)
+    conf = mol.GetConformer()
+    for i in range(min(mol.GetNumAtoms(), coords.shape[0])):
+        conf.SetAtomPosition(i, coords[i].tolist())
+    writer = Chem.SDWriter(path)
+    writer.write(mol)
+    writer.close()
+
+
+def _dump_qm_candidates(
+    artifact_dir: str,
+    pdb_id: str,
+    seed: int,
+    mol_template,
+    refined_poses: torch.Tensor,
+    candidate_rows: list[dict],
+    topk: int,
+    pos_native: torch.Tensor | None = None,
+) -> str | None:
+    """Export ranked ligand poses for downstream QM/xTB rescoring."""
+    if topk <= 0 or not artifact_dir or mol_template is None or not candidate_rows:
+        return None
+
+    out_dir = os.path.join(
+        artifact_dir,
+        "qm_candidates",
+        str(pdb_id),
+        f"seed_{int(seed)}",
+    )
+    os.makedirs(out_dir, exist_ok=True)
+
+    sorted_rows = sorted(
+        (dict(row) for row in candidate_rows),
+        key=lambda row: float(row.get("rank_score", float("-inf"))),
+        reverse=True,
+    )
+
+    export_count = min(int(topk), len(sorted_rows))
+    for export_rank, row in enumerate(sorted_rows, start=1):
+        row["export_rank"] = export_rank
+        row["exported_to_qm"] = int(export_rank <= export_count)
+        row["sdf_file"] = ""
+
+    refined_cpu = refined_poses.detach().cpu()
+    for row in sorted_rows[:export_count]:
+        idx = int(row["candidate_idx"])
+        sdf_name = f"candidate_rank_{int(row['export_rank']):02d}_idx_{idx:03d}.sdf"
+        sdf_path = os.path.join(out_dir, sdf_name)
+        _write_pose_sdf(mol_template, refined_cpu[idx].numpy(), sdf_path)
+        row["sdf_file"] = sdf_name
+
+    if pos_native is not None and pos_native.numel() > 0:
+        _write_pose_sdf(mol_template, pos_native.detach().cpu().numpy(), os.path.join(out_dir, "native_pose.sdf"))
+
+    selected_row = next((row for row in sorted_rows if int(row.get("is_selected", 0)) == 1), None)
+    if selected_row is not None:
+        idx = int(selected_row["candidate_idx"])
+        _write_pose_sdf(mol_template, refined_cpu[idx].numpy(), os.path.join(out_dir, "selected_pose.sdf"))
+
+    oracle_row = next((row for row in sorted_rows if int(row.get("is_oracle_best", 0)) == 1), None)
+    if oracle_row is not None:
+        idx = int(oracle_row["candidate_idx"])
+        _write_pose_sdf(mol_template, refined_cpu[idx].numpy(), os.path.join(out_dir, "oracle_best_pose.sdf"))
+
+    fieldnames = [
+        "export_rank",
+        "candidate_idx",
+        "rank_score",
+        "logz_score",
+        "energy_score",
+        "clash_score",
+        "final_energy",
+        "clash",
+        "rmsd",
+        "is_selected",
+        "is_oracle_best",
+        "exported_to_qm",
+        "sdf_file",
+    ]
+    with open(os.path.join(out_dir, "candidate_metadata.csv"), "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in sorted_rows:
+            writer.writerow({name: row.get(name, "") for name in fieldnames})
+
+    with open(os.path.join(out_dir, "candidate_topk.csv"), "w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in sorted_rows[:export_count]:
+            writer.writerow({name: row.get(name, "") for name in fieldnames})
+
+    with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as fh:
+        fh.write(
+            "QM candidate export for downstream xTB rescoring.\n"
+            f"PDB ID: {pdb_id}\n"
+            f"Seed: {int(seed)}\n"
+            f"Exported top-k: {export_count}\n"
+            "Files:\n"
+            "  - candidate_metadata.csv: all refined particles with scores\n"
+            "  - candidate_topk.csv: exported top-k subset\n"
+            "  - candidate_rank_XX_idx_YYY.sdf: ligand poses for QM rescoring\n"
+            "  - selected_pose.sdf: current docking selection\n"
+            "  - oracle_best_pose.sdf: best RMSD pose (diagnostic only)\n"
+            "  - native_pose.sdf: native ligand pose\n"
+        )
+
+    return out_dir
 
 
 class BeamDocking:
@@ -1196,10 +1311,10 @@ class SAEBFlowRefinement:
 
         final_energy_t = torch.tensor(final_scores, device=device, dtype=torch.float32)
         clash_final = self.phys.calculate_internal_geometry_score(best_pos).float()
-        selection_score_name = str(getattr(self.config, "selection_score", "hybrid")).strip().lower()
+        selection_score_name = str(getattr(self.config, "selection_score", "energy")).strip().lower()
         score_map = _build_selection_scores(rank_signal, final_energy_t, clash_final)
         if selection_score_name not in score_map:
-            selection_score_name = "hybrid"
+            selection_score_name = "energy"
         rank_scores = score_map[selection_score_name]
         rank_order = torch.argsort(rank_scores, descending=True)
         rank_proxy_final = float(rank_scores[rank_order[0]].item()) if rank_order.numel() else float("nan")
@@ -1207,6 +1322,7 @@ class SAEBFlowRefinement:
         rank_top1_hit = float("nan")
         rank_top3_hit = float("nan")
         ranked_rmsd = float("nan")
+        candidate_rows = []
         if pos_native is not None and pos_native.numel() > 0:
             rmsd_all = kabsch_rmsd(best_pos, pos_native)
             ranked_rmsd = float(rmsd_all[rank_order[0]].item())
@@ -1217,6 +1333,33 @@ class SAEBFlowRefinement:
             rank_top1_hit = float(int(rank_order[0].item()) == int(oracle_order[0].item()))
             rank_top3_hit = float(any(v in oracle_topk for v in picked_topk))
             rank_spearman = _spearman_from_tensors(rank_scores, -rmsd_all)
+            for i in range(B):
+                candidate_rows.append({
+                    "candidate_idx": i,
+                    "rank_score": float(rank_scores[i].item()),
+                    "logz_score": float(score_map["logz"][i].item()),
+                    "energy_score": float(score_map["energy"][i].item()),
+                    "clash_score": float(score_map["clash"][i].item()),
+                    "final_energy": float(final_energy_t[i].item()),
+                    "clash": float(clash_final[i].item()),
+                    "rmsd": float(rmsd_all[i].item()),
+                    "is_selected": int(i == int(rank_order[0].item())),
+                    "is_oracle_best": int(i == int(oracle_order[0].item())),
+                })
+        else:
+            for i in range(B):
+                candidate_rows.append({
+                    "candidate_idx": i,
+                    "rank_score": float(rank_scores[i].item()),
+                    "logz_score": float(score_map["logz"][i].item()),
+                    "energy_score": float(score_map["energy"][i].item()),
+                    "clash_score": float(score_map["clash"][i].item()),
+                    "final_energy": float(final_energy_t[i].item()),
+                    "clash": float(clash_final[i].item()),
+                    "rmsd": float("nan"),
+                    "is_selected": int(i == int(rank_order[0].item())),
+                    "is_oracle_best": 0,
+                })
 
         return {
             "refined_poses": best_pos,
@@ -1235,6 +1378,7 @@ class SAEBFlowRefinement:
             "ranked_rmsd": ranked_rmsd,
             "selected_idx": int(rank_order[0].item()) if rank_order.numel() else 0,
             "selection_score": selection_score_name,
+            "candidate_rows": candidate_rows,
         }
 
     def _call_smina_score(self, protein_pdb, ligand_sdf):
@@ -1363,6 +1507,17 @@ class SAEBFlowRefinement:
                 os.makedirs("results", exist_ok=True)
                 save_points_as_pdb(best_pos, f"results/{self.config.pdb_id}_best.pdb")
 
+            qm_candidate_dir = _dump_qm_candidates(
+                artifact_dir=str(getattr(self.config, "artifact_dir", "") or ""),
+                pdb_id=self.config.pdb_id,
+                seed=int(getattr(self.config, "seed", 0)),
+                mol_template=lig_template,
+                refined_poses=refined_poses,
+                candidate_rows=refine_out.get("candidate_rows", []),
+                topk=int(getattr(self.config, "dump_candidate_topk", 0)),
+                pos_native=pos_native,
+            )
+
             return {
                 "pdb_id":          self.config.pdb_id,
                 "best_rmsd":       best_rmsd,
@@ -1380,7 +1535,8 @@ class SAEBFlowRefinement:
                 "rank_top1_hit": refine_out.get("rank_top1_hit", float("nan")),
                 "rank_top3_hit": refine_out.get("rank_top3_hit", float("nan")),
                 "ranked_rmsd": refine_out.get("ranked_rmsd", float("nan")),
-                "selection_score": refine_out.get("selection_score", getattr(self.config, "selection_score", "hybrid")),
+                "selection_score": refine_out.get("selection_score", getattr(self.config, "selection_score", "energy")),
+                "qm_candidate_dir": qm_candidate_dir or "",
             }
 
         # ── Ligand ensemble initialisation ──────────────────────────────────
@@ -2006,5 +2162,5 @@ class SAEBFlowRefinement:
             "rank_top1_hit": float("nan"),
             "rank_top3_hit": float("nan"),
             "ranked_rmsd": float("nan"),
-            "selection_score": getattr(self.config, "selection_score", "hybrid"),
+            "selection_score": getattr(self.config, "selection_score", "energy"),
         }

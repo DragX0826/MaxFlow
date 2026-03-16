@@ -112,7 +112,9 @@ def run_single_target(pdb_id, device_id, seed, args):
         adaptive_min_step_frac=getattr(args, "adaptive_min_step_frac", 0.65),
         adaptive_patience_frac=getattr(args, "adaptive_patience_frac", 0.12),
         rerank_polish_mult=getattr(args, "rerank_polish_mult", 2),
-        selection_score=getattr(args, "selection_score", "hybrid"),
+        selection_score=getattr(args, "selection_score", "energy"),
+        dump_candidate_topk=getattr(args, "dump_candidate_topk", 0),
+        artifact_dir=getattr(args, "output_dir", ""),
         quiet=getattr(args, "quiet", False),
     )
 
@@ -196,9 +198,11 @@ def main():
                         help="No-improvement patience fraction required for adaptive stop")
     parser.add_argument("--rerank_polish_mult", type=int, default=2,
                         help="Second-stage rerank: polish multiplier over final_mmff_topk")
-    parser.add_argument("--selection_score", type=str, default="hybrid",
+    parser.add_argument("--selection_score", type=str, default="energy",
                         choices=["hybrid", "logz", "energy", "clash", "energy_clash"],
                         help="Score used to select the final pose from refined particles")
+    parser.add_argument("--dump_candidate_topk", type=int, default=0,
+                        help="If >0, dump top-k candidate poses and metadata for downstream rescoring")
     parser.add_argument("--quiet", action="store_true",
                         help="Reduce terminal output noise (warnings/errors only)")
     # Output
@@ -246,6 +250,9 @@ def main():
     if args.rerank_polish_mult < 1:
         logger.warning(f"rerank_polish_mult={args.rerank_polish_mult} invalid; clamping to 1.")
         args.rerank_polish_mult = 1
+    if args.dump_candidate_topk < 0:
+        logger.warning(f"dump_candidate_topk={args.dump_candidate_topk} invalid; clamping to 0.")
+        args.dump_candidate_topk = 0
 
     if args.high_fidelity:
         logger.info(f"High-fidelity mode: steps={args.steps}, B={args.batch_size}")
@@ -284,6 +291,7 @@ def main():
                 f"adaptive_patience_frac={args.adaptive_patience_frac:.2f} | "
                 f"rerank_polish_mult={args.rerank_polish_mult} | "
                 f"selection_score={args.selection_score} | "
+                f"dump_candidate_topk={args.dump_candidate_topk} | "
                 f"quiet={args.quiet}")
 
     results_summary = []
@@ -347,6 +355,7 @@ def main():
             "best_rmsd", "oracle_best_rmsd", "mean_rmsd", "final_energy",
             "log_Z_final", "ess_min", "resample_count", "pb_valid_frac", "mmff_fallback_rate",
             "rank_proxy_final", "rank_spearman", "rank_top1_hit", "rank_top3_hit", "ranked_rmsd", "selection_score",
+            "qm_candidate_dir",
             "steps", "time_sec",
         ]
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -356,10 +365,10 @@ def main():
             row["seed"] = r.get("seed", row.get("seed", 0))
             for k in (
                 "log_Z_final", "ess_min", "resample_count", "pb_valid_frac", "mmff_fallback_rate",
-                "rank_proxy_final", "rank_spearman", "rank_top1_hit", "rank_top3_hit", "ranked_rmsd",
+                "rank_proxy_final", "rank_spearman", "rank_top1_hit", "rank_top3_hit", "ranked_rmsd", "qm_candidate_dir",
             ):
                 row.setdefault(k, "")
-            row.setdefault("selection_score", getattr(args, "selection_score", "hybrid"))
+            row.setdefault("selection_score", getattr(args, "selection_score", "energy"))
             row.setdefault("oracle_best_rmsd", row.get("best_rmsd", ""))
             row.setdefault("time_sec", 0)
             writer.writerow(row)

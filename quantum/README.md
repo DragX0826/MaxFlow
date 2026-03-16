@@ -1,27 +1,42 @@
 # Quantum Folder
 
-This folder centralizes the local quantum-method side project and its proof artifacts.
+This folder now serves two purposes:
+
+- legacy proof artifacts for the small local VQE demo
+- the current QM-rescoring workflow that plugs into the docking pipeline
 
 Contents:
 
+- `scripts/qm_rescore_xtb.py`
+  Rescores exported docking candidates with `GFN-xTB` and writes `xtb_rescored.csv`.
 - `scripts/quantum_h2_vqe_demo.py`
-  Runs the local H2 VQE demo and writes CSV, figures, and a short summary.
+  Legacy local H2 VQE demo.
 - `scripts/generate_two_track_proof_pdf.py`
-  Builds the one-page PDF that summarizes both project routes:
-  the Kaggle docking benchmark route and the local quantum proof route.
-- `outputs/quantum_h2_vqe_run2/`
-  Generated outputs from the latest local quantum run.
-- `outputs/two_track_proof_sheet.pdf`
-  One-page proof sheet combining the Kaggle main route and the quantum demo route.
+  Legacy one-page PDF generator for the old proof sheet.
+- `outputs/`
+  Local artifacts from the older quantum demo route.
 
-Project split:
+Current recommended workflow:
 
-- Main route:
-  Kaggle docking benchmark for pose prediction, stability, efficiency, and ranking claims.
-- Quantum route:
-  Small local H2 VQE proof-of-concept used as application/interview evidence for quantum-method exposure.
+1. Run docking with candidate export enabled:
+   `python -u src/run_benchmark.py ... --selection_score energy --dump_candidate_topk 5`
+2. Locate exported candidates under:
+   `<output_dir>/qm_candidates/<pdb_id>/seed_<seed>/`
+3. Run xTB rescoring:
+   `python quantum/scripts/qm_rescore_xtb.py --input <candidate_dir> --xtb_bin xtb`
+4. Inspect:
+   - `candidate_metadata.csv`
+   - `candidate_topk.csv`
+   - `xtb_rescored.csv`
+   - `xtb_summary.txt`
+
+What this QM step does:
+
+- It does not replace docking.
+- It rescales the final top-k ligand poses using a QM ligand-strain signal from `GFN-xTB`.
+- The intended use is a lightweight, practical `QM-informed rescoring` stage after FK-SMC/SOCM.
 
 Notes:
 
-- The current quantum run uses the fallback mode because PySCF was unavailable on this Windows machine.
-- The fallback still produces a usable proof artifact: a standard H2 tutorial Hamiltonian VQE point plus a UFF scan.
+- This is the pragmatic first step. It corrects ligand strain, not full protein-ligand QM interaction.
+- If this improves ranking, the next stage is a tighter pocket-cluster QM/MM style rescoring pass.
