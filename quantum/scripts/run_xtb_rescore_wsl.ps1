@@ -3,6 +3,8 @@ param(
     [string]$InputPath,
     [string]$Distro = "Ubuntu",
     [string]$XtbBin = "xtb",
+    [ValidateSet("ligand","ligand_xyz","complex")]
+    [string]$Mode = "ligand",
     [int]$Charge = 0,
     [int]$Uhf = 0,
     [ValidateSet(0,1,2)]
@@ -36,6 +38,7 @@ $cmdParts = @(
     "cd '$repoWsl' && python3 quantum/scripts/qm_rescore_xtb.py",
     "--input '$inputWsl'",
     "--xtb_bin '$XtbBin'",
+    "--mode '$Mode'",
     "--charge $Charge",
     "--uhf $Uhf",
     "--gfn $Gfn",

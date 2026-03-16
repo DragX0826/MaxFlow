@@ -144,6 +144,34 @@ def _write_pose_sdf(mol_template, coords: np.ndarray, path: str) -> None:
     writer.close()
 
 
+def _write_xyz(symbols: list[str], coords: np.ndarray, path: str, comment: str = "") -> None:
+    """Write a simple XYZ file."""
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(f"{len(symbols)}\n")
+        fh.write(f"{comment}\n")
+        for symbol, (x, y, z) in zip(symbols, coords):
+            fh.write(f"{symbol:2s} {float(x): .8f} {float(y): .8f} {float(z): .8f}\n")
+
+
+def _protein_symbols_from_features(x_P: torch.Tensor) -> list[str]:
+    """Infer protein atom symbols from the first four atom-type channels."""
+    type_symbols = ["C", "N", "O", "S"]
+    if x_P.numel() == 0:
+        return []
+    atom_type = torch.argmax(x_P[:, :4], dim=-1).detach().cpu().tolist()
+    return [type_symbols[int(idx)] if 0 <= int(idx) < len(type_symbols) else "C" for idx in atom_type]
+
+
+def _ligand_symbols_from_template(mol_template, atom_count: int) -> list[str]:
+    """Infer ligand atom symbols from the RDKit template."""
+    if mol_template is None:
+        return ["C"] * atom_count
+    symbols = [atom.GetSymbol() or "C" for atom in mol_template.GetAtoms()]
+    if len(symbols) < atom_count:
+        symbols.extend(["C"] * (atom_count - len(symbols)))
+    return symbols[:atom_count]
+
+
 def _dump_qm_candidates(
     artifact_dir: str,
     pdb_id: str,
@@ -152,7 +180,10 @@ def _dump_qm_candidates(
     refined_poses: torch.Tensor,
     candidate_rows: list[dict],
     topk: int,
+    pos_P: torch.Tensor | None = None,
+    x_P: torch.Tensor | None = None,
     pos_native: torch.Tensor | None = None,
+    cluster_cutoff: float = 6.0,
 ) -> str | None:
     """Export ranked ligand poses for downstream QM/xTB rescoring."""
     if topk <= 0 or not artifact_dir or mol_template is None or not candidate_rows:
@@ -179,12 +210,48 @@ def _dump_qm_candidates(
         row["sdf_file"] = ""
 
     refined_cpu = refined_poses.detach().cpu()
+    exported_indices = [int(row["candidate_idx"]) for row in sorted_rows[:export_count]]
+    cluster_coords = np.zeros((0, 3), dtype=np.float32)
+    cluster_symbols: list[str] = []
+    if pos_P is not None and x_P is not None and pos_P.numel() > 0 and x_P.size(0) == pos_P.size(0):
+        pos_P_cpu = pos_P.detach().cpu()
+        x_P_cpu = x_P.detach().cpu()
+        ligand_union = refined_cpu[exported_indices].reshape(-1, 3)
+        dists = torch.cdist(pos_P_cpu, ligand_union)
+        keep_mask = dists.min(dim=1).values <= float(cluster_cutoff)
+        if keep_mask.any():
+            cluster_coords = pos_P_cpu[keep_mask].numpy()
+            cluster_symbols = _protein_symbols_from_features(x_P_cpu[keep_mask])
+            _write_xyz(
+                cluster_symbols,
+                cluster_coords,
+                os.path.join(out_dir, "protein_pocket_cluster.xyz"),
+                comment=f"protein pocket cluster cutoff={float(cluster_cutoff):.1f}A",
+            )
+
+    ligand_symbols = _ligand_symbols_from_template(mol_template, refined_cpu.shape[1])
     for row in sorted_rows[:export_count]:
         idx = int(row["candidate_idx"])
         sdf_name = f"candidate_rank_{int(row['export_rank']):02d}_idx_{idx:03d}.sdf"
         sdf_path = os.path.join(out_dir, sdf_name)
-        _write_pose_sdf(mol_template, refined_cpu[idx].numpy(), sdf_path)
+        ligand_coords = refined_cpu[idx].numpy()
+        _write_pose_sdf(mol_template, ligand_coords, sdf_path)
         row["sdf_file"] = sdf_name
+        _write_xyz(
+            ligand_symbols,
+            ligand_coords,
+            os.path.join(out_dir, sdf_name.replace(".sdf", "_ligand.xyz")),
+            comment=f"ligand-only pose for candidate {idx}",
+        )
+        if cluster_symbols:
+            complex_symbols = cluster_symbols + ligand_symbols
+            complex_coords = np.concatenate([cluster_coords, ligand_coords], axis=0)
+            _write_xyz(
+                complex_symbols,
+                complex_coords,
+                os.path.join(out_dir, sdf_name.replace(".sdf", "_complex.xyz")),
+                comment=f"protein-cluster + ligand candidate {idx}",
+            )
 
     if pos_native is not None and pos_native.numel() > 0:
         _write_pose_sdf(mol_template, pos_native.detach().cpu().numpy(), os.path.join(out_dir, "native_pose.sdf"))
@@ -1515,6 +1582,8 @@ class SAEBFlowRefinement:
                 refined_poses=refined_poses,
                 candidate_rows=refine_out.get("candidate_rows", []),
                 topk=int(getattr(self.config, "dump_candidate_topk", 0)),
+                pos_P=pos_P,
+                x_P=x_P,
                 pos_native=pos_native,
             )
 

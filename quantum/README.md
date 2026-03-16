@@ -40,6 +40,18 @@ What this QM step does:
 - It rescales the final top-k ligand poses using a QM ligand-strain signal from `GFN-xTB`.
 - The intended use is a lightweight, practical `QM-informed rescoring` stage after FK-SMC/SOCM.
 
+Candidate export now also writes:
+
+- `protein_pocket_cluster.xyz`
+- `candidate_rank_XX_idx_YYY_ligand.xyz`
+- `candidate_rank_XX_idx_YYY_complex.xyz`
+
+This supports a second-stage pocket-aware experiment:
+
+- `--mode ligand` for the original SDF-based ligand-only path
+- `--mode ligand_xyz` for explicit ligand XYZ
+- `--mode complex` for protein-cluster plus ligand complex XYZ
+
 Notes:
 
 - This is the pragmatic first step. It corrects ligand strain, not full protein-ligand QM interaction.

@@ -73,11 +73,14 @@ def _parse_total_energy(stdout_text: str):
     raise ValueError("Could not parse TOTAL ENERGY from xTB output")
 
 
-def _run_xtb(sdf_path: Path, xtb_bin: str, charge: int, uhf: int, gfn: int, alpb: str, opt: bool, keep_workdir: bool):
+def _run_xtb(xyz_source: Path, xtb_bin: str, charge: int, uhf: int, gfn: int, alpb: str, opt: bool, keep_workdir: bool):
     workdir_obj = tempfile.TemporaryDirectory(prefix="xtb_rescore_")
     workdir = Path(workdir_obj.name)
     xyz_path = workdir / "input.xyz"
-    _write_xyz_from_sdf(sdf_path, xyz_path)
+    if xyz_source.suffix.lower() == ".sdf":
+        _write_xyz_from_sdf(xyz_source, xyz_path)
+    else:
+        xyz_path.write_text(xyz_source.read_text(encoding="utf-8"), encoding="utf-8")
 
     cmd = [
         xtb_bin,
@@ -111,9 +114,9 @@ def _run_xtb(sdf_path: Path, xtb_bin: str, charge: int, uhf: int, gfn: int, alpb
 
     saved_workdir = ""
     if keep_workdir:
-        saved_root = sdf_path.parent / "xtb_workdirs"
+        saved_root = xyz_source.parent / "xtb_workdirs"
         saved_root.mkdir(exist_ok=True)
-        saved_dir = saved_root / sdf_path.stem
+        saved_dir = saved_root / xyz_source.stem
         if saved_dir.exists():
             shutil.rmtree(saved_dir)
         shutil.copytree(workdir, saved_dir)
@@ -140,8 +143,24 @@ def _rescore_directory(candidate_dir: Path, args):
         if not sdf_file:
             continue
         sdf_path = candidate_dir / sdf_file
+        xyz_source = sdf_path
+        if args.mode == "complex":
+            complex_path = candidate_dir / sdf_file.replace(".sdf", "_complex.xyz")
+            if not complex_path.exists():
+                result = dict(row)
+                result["xtb_ok"] = 0
+                result["xtb_returncode"] = -999
+                result["xtb_energy_eh"] = float("nan")
+                result["xtb_workdir"] = ""
+                results.append(result)
+                continue
+            xyz_source = complex_path
+        elif args.mode == "ligand_xyz":
+            ligand_xyz = candidate_dir / sdf_file.replace(".sdf", "_ligand.xyz")
+            if ligand_xyz.exists():
+                xyz_source = ligand_xyz
         run_info = _run_xtb(
-            sdf_path=sdf_path,
+            xyz_source=xyz_source,
             xtb_bin=args.xtb_bin,
             charge=args.charge,
             uhf=args.uhf,
@@ -151,6 +170,8 @@ def _rescore_directory(candidate_dir: Path, args):
             keep_workdir=args.keep_workdir,
         )
         result = dict(row)
+        result["xtb_mode"] = args.mode
+        result["xtb_input_file"] = xyz_source.name
         result["xtb_ok"] = int(run_info["returncode"] == 0 and math.isfinite(run_info["energy_eh"]))
         result["xtb_returncode"] = run_info["returncode"]
         result["xtb_energy_eh"] = run_info["energy_eh"]
@@ -201,6 +222,7 @@ def _rescore_directory(candidate_dir: Path, args):
         fh.write("xTB rescoring summary\n")
         fh.write(f"Candidate directory: {candidate_dir}\n")
         fh.write(f"Method: GFN{args.gfn}-xTB\n")
+        fh.write(f"Mode: {args.mode}\n")
         fh.write(f"Charge: {args.charge}\n")
         fh.write(f"UHF: {args.uhf}\n")
         fh.write(f"ALPB: {args.alpb or 'none'}\n")
@@ -224,6 +246,7 @@ def main():
     parser = argparse.ArgumentParser(description="Rescore exported docking poses with GFN-xTB.")
     parser.add_argument("--input", required=True, help="Candidate directory or root containing candidate_topk.csv files")
     parser.add_argument("--xtb_bin", default="xtb", help="Path to xtb executable")
+    parser.add_argument("--mode", default="ligand", choices=["ligand", "ligand_xyz", "complex"], help="Input geometry mode for xTB")
     parser.add_argument("--charge", type=int, default=0, help="Total charge for xTB")
     parser.add_argument("--uhf", type=int, default=0, help="Number of unpaired electrons for xTB")
     parser.add_argument("--gfn", type=int, default=2, choices=[0, 1, 2], help="GFN level")
