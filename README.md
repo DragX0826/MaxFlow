@@ -1,8 +1,24 @@
 # PoseRefineLab
 
-PoseRefineLab is the working repository for our docking and pose-refinement project together with a small QM negative-result study.
+PoseRefineLab is a research codebase for protein-ligand pose refinement, benchmark analysis, and failure-mode auditing. The repository combines the current SAEB docking pipeline, benchmark/report generation utilities, and a compact QM negative-result study used to test whether xTB rescoring improves final pose ranking.
 
-The repository is organized around the code that is still relevant, the current report packages, and the scripts required to regenerate them.
+The public repository is intentionally scoped to the code and artifacts that support the current technical conclusions: stable benchmark execution, explicit search-vs-selection diagnosis, and reproducible report packages under `reports/`.
+
+## Repository At A Glance
+
+- `src/` — main docking, refinement, scoring, and benchmark code
+- `scripts/` — report generation, audits, and benchmark helpers
+- `reports/` — curated docking and QM result packages for external review
+- `docs/` — current project status and technical notes
+- `quantum/` — QM/xTB utilities used in the pilot rescoring study
+
+## Current Technical Position
+
+- `SOCM` is slightly better on aggregate docking accuracy
+- `FK-SMC + SOCM` is more stable across seeds
+- hard failures are primarily `search-limited`, not just reranking failures
+- MMFF outlier contamination is handled by auto-disable safeguards
+- QM rescoring is retained as a pilot negative result, not a claimed improvement
 
 ## Installation
 
