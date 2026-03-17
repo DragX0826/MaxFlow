@@ -1,55 +1,94 @@
-# MaxFlow: Hyper-Hardened Geodesic Flow-Matching for CPU-Native Docking
+# MaxFlow
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/release/python-390/)
-[![ICLR 2026](https://img.shields.io/badge/ICLR%202026-Workshop-red.svg)](#)
+MaxFlow is the working repository for our AI docking / pose-refinement project and its associated QM negative-result study.
 
-**MaxFlow** is a novel generative flow-matching architecture designed for high-precision molecular blind docking on CPU-native hardware. By integrating equivariant Kabsch projections with confidence-bootstrapped shortcut flows, MaxFlow achieves SOTA performance while maintaining rigorous numerical stability.
+This repository is now organized around the code that is still relevant, the final evidence packages, and the scripts required to regenerate them.
 
-## 🚀 Key Features
-- **Fragment-SE(3) Manifold**: Preserves torsional integrity via dynamic fragment segmentation and Kabsch SVD projections.
-- **CBSF (Shortcut Flow)**: Reduces function evaluations by 85% through confidence-guided direct trajectory jumps.
-- **Numerical Sterilization**: Epsilon-safe manifolds and Log-Leaky clamping to prevent force-field singularities.
-- **CPU-Native Acceleration**: Highly optimized PyTorch backend achieving 6X speedup over DiffDock on standard CPUs.
+## What This Repo Contains
 
-## 📊 Performance (v97.4)
-Evaluation on a diverse 10-target generalization suite:
+- `src/`
+  - main SAEB/MaxFlow implementation
+  - refinement, scoring, MMFF safeguards, and benchmark logic
+- `scripts/`
+  - benchmark utilities
+  - audit scripts
+  - `build_workshop_evidence.py` to rebuild the final evidence packages
+- `docs/`
+  - current project status and technical notes
+- `deliverables/workshop_evidence/`
+  - final proof documents, figures, and core tables for:
+    - docking project
+    - QM negative-result project
+- `quantum/`
+  - QM/xTB-related scripts and lightweight notes used to build the negative-result package
 
-| Metric | MaxFlow v97.4 | DiffDock Baseline |
-| :--- | :---: | :---: |
-| **Avg. RMSD (Å)** | **1.88** | 5.84 |
-| **Median RMSD (Å)** | **1.42** | 4.50 |
-| **Completion Rate** | **100%** | 80% |
-| **Inference Time (s)** | **~45s** | ~270s |
+## Current Project Position
 
-## 🛠️ Installation
+The docking project currently supports a stability-focused claim more strongly than an accuracy-superiority claim.
+
+Supported by the current evidence:
+
+- `SOCM` remains slightly better on aggregate docking accuracy
+- `FK-SMC + SOCM` is materially more stable across seeds
+- hard failures are now diagnosed as primarily `search-limited`
+- MMFF outlier contamination is handled by auto-disable safeguards
+
+The QM line is kept as a documented pilot negative result:
+
+- the xTB rescoring workflow works end-to-end
+- but ligand-only and pocket-cluster rescoring did not improve pose ranking on the tested cases
+
+## Key Deliverables
+
+Docking evidence package:
+
+- `deliverables/workshop_evidence/docking_project/proof_document.md`
+- `deliverables/workshop_evidence/docking_project/stability_comparison.png`
+- `deliverables/workshop_evidence/docking_project/gap_audit_targets.png`
+- `deliverables/workshop_evidence/docking_project/summary_metrics.png`
+
+Quantum evidence package:
+
+- `deliverables/workshop_evidence/quantum_project/proof_document.md`
+- `deliverables/workshop_evidence/quantum_project/qm_rmsd_comparison.png`
+- `deliverables/workshop_evidence/quantum_project/qm_delta_vs_selected.png`
+
+## Rebuilding The Evidence Packages
+
+From the repository root:
+
 ```bash
-# Clone the repository
-git clone https://github.com/anonymous/maxflow.git
-cd maxflow
-
-# Install dependencies
-pip install -r requirements.txt # BioPython, RDKit, PyTorch, ESM
+python scripts/build_workshop_evidence.py
 ```
 
-## 📖 Usage
-To run a single docking experiment:
+This regenerates:
+
+- `deliverables/workshop_evidence/docking_project/`
+- `deliverables/workshop_evidence/quantum_project/`
+
+from the retained final CSV inputs and QM summary files.
+
+## Benchmark Entry Points
+
+Main benchmark CLI:
+
 ```bash
-python lite_experiment_suite.py --target 1UYD --steps 1000
+python src/run_benchmark.py --help
 ```
 
-To reproduce the ICLR benchmark:
+Astex-10 FK-SMC + SOCM wrapper:
+
 ```bash
-python run_benchmark_10.py
+python src/run_astex10_fksmc_socm.py --help
 ```
 
-## 📜 Citation
-If you use MaxFlow in your research, please cite our ICLR 2026 Workshop paper:
-```bibtex
-@article{maxflow2026,
-  title={MaxFlow-v97.4: Hyper-Hardened Architectural Scaling for CPU-Bound Blind Docking},
-  author={Anonymous},
-  journal={ICLR 2026 Workshop on AI for Drug Discovery},
-  year={2026}
-}
+Search-vs-selection audit:
+
+```bash
+python scripts/search_selection_gap_audit.py --help
 ```
+
+## Notes
+
+- Intermediate Kaggle outputs, experimental scratch results, archives, and legacy submission folders are intentionally excluded from GitHub.
+- The repository is meant to present the current working code and the final evidence package, not every historical artifact.

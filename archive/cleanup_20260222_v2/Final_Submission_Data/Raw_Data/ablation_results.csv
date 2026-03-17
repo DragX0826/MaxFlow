@@ -1,6 +1,0 @@
-Configuration,RMSD
-Full (F-SE3+PI+CBSF),2.06
-W/O Fragment-SE3,0.42
-W/O PI-Drift,1.83
-W/O CBSF,0.68
-Pure Cartesian (Baseline),166.34
